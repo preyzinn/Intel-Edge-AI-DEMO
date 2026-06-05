@@ -12,11 +12,14 @@ def gerar(prompt):
         "model": "llama3",
         "prompt": prompt,
         "stream": False
-    }).json()
+    }, timeout=120)
+    response.raise_for_status()
+
+    data = response.json()
 
     latency = time.time() - start
 
     return {
-        "text": response.get("response"),
+        "text": data.get("response", ""),
         "latency": latency
     }
