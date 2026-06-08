@@ -3,8 +3,6 @@ from pydantic import BaseModel
 from Model.ai_engine import gerar
 
 router = APIRouter()
-
-
 class ChatRequest(BaseModel):
     prompt: str
 
