@@ -278,26 +278,5 @@ Check the Ollama response format and confirm the model is working directly:
 ollama run llama3
 ```
 
-## Development Notes
 
-Run a quick syntax check:
 
-```bash
-python -m py_compile main.py Controller/chat_controller.py Model/ai_engine.py View/app.py
-```
-
-Suggested optional improvement:
-
-```bash
-pip freeze > requirements.txt
-```
-
-This makes dependency installation easier for other users:
-
-```bash
-pip install -r requirements.txt
-```
-
-## License
-
-No license has been specified yet. Add a `LICENSE` file before publishing if you want to define how others may use this project.
