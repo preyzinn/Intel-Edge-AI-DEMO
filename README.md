@@ -61,7 +61,7 @@ Python packages:
 ### 1. Clone the Repository
 
 ```bash
-git clone <your-repository-url>
+git clone https://github.com/preyzinn/Intel-Edge-AI-DEMO
 cd "edge ai test"
 ```
 
