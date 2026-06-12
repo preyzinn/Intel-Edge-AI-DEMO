@@ -1,0 +1,33 @@
+# Python/cache
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Local environments
+.venv/
+venv/
+.env
+
+# IDE/local files
+.idea/
+.vscode/
+
+# Runtime logs
+.logs/
+*.log
+
+# Downloaded/generated model artifacts
+Model/hf_models/
+Model/openvino_models/
+*.safetensors
+*.bin
+*.onnx
+*.gguf
+*.pt
+*.pth
+*.ckpt
+*.tflite
+*.xml
+
+# Streamlit local config/secrets
+.streamlit/secrets.toml

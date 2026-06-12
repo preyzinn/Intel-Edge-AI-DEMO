@@ -25,6 +25,7 @@ MODEL_CATALOG: dict[str, dict[str, Any]] = {
         "provider": "ollama",
         "backend": "Ollama",
         "optimized": False,
+        "inference_device": "Ollama runtime",
         "model": "llama3",
         "description": "Modelo local servido pelo Ollama.",
     },
@@ -36,6 +37,7 @@ MODEL_CATALOG: dict[str, dict[str, Any]] = {
         "provider": "transformers",
         "backend": "Transformers/PyTorch",
         "optimized": False,
+        "inference_device": "CPU",
         "hf_model_id": "TinyLlama/TinyLlama-1.1B-Chat-v1.0",
         "local_dir": HF_MODELS_DIR / "tinyllama-1.1b-chat",
         "description": "Modelo base sem OpenVINO, executado com Transformers/PyTorch.",
@@ -48,6 +50,11 @@ MODEL_CATALOG: dict[str, dict[str, Any]] = {
         "provider": "openvino",
         "backend": "OpenVINO",
         "optimized": True,
+        "inference_device": "CPU",
+        "supported_openvino_devices": ["CPU", "GPU"],
+        "unsupported_openvino_devices": {
+            "NPU": "Este LLM OpenVINO foi exportado com shapes dinamicos; o compilador NPU exige shapes estaticos para este grafo.",
+        },
         "hf_model_id": "TinyLlama/TinyLlama-1.1B-Chat-v1.0",
         "local_dir": OPENVINO_MODELS_DIR / "tinyllama-1.1b-chat",
         "description": "Mesma familia, exportada para inferencia otimizada com OpenVINO.",
@@ -60,6 +67,7 @@ MODEL_CATALOG: dict[str, dict[str, Any]] = {
         "provider": "transformers",
         "backend": "Transformers/PyTorch",
         "optimized": False,
+        "inference_device": "CPU",
         "hf_model_id": "Qwen/Qwen2.5-0.5B-Instruct",
         "local_dir": HF_MODELS_DIR / "qwen2.5-0.5b-instruct",
         "description": "Modelo base sem OpenVINO, executado com Transformers/PyTorch.",
@@ -72,6 +80,11 @@ MODEL_CATALOG: dict[str, dict[str, Any]] = {
         "provider": "openvino",
         "backend": "OpenVINO",
         "optimized": True,
+        "inference_device": "CPU",
+        "supported_openvino_devices": ["CPU", "GPU"],
+        "unsupported_openvino_devices": {
+            "NPU": "Este LLM OpenVINO foi exportado com shapes dinamicos; o compilador NPU exige shapes estaticos para este grafo.",
+        },
         "hf_model_id": "Qwen/Qwen2.5-0.5B-Instruct",
         "local_dir": OPENVINO_MODELS_DIR / "qwen2.5-0.5b-instruct",
         "description": "Mesma familia, exportada para inferencia otimizada com OpenVINO.",
@@ -84,6 +97,7 @@ MODEL_CATALOG: dict[str, dict[str, Any]] = {
         "provider": "transformers",
         "backend": "Transformers/PyTorch",
         "optimized": False,
+        "inference_device": "CPU",
         "hf_model_id": "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B",
         "local_dir": HF_MODELS_DIR / "deepseek-r1-distill-qwen-1.5b",
         "description": "DeepSeek base sem OpenVINO, executado com Transformers/PyTorch.",
@@ -96,6 +110,11 @@ MODEL_CATALOG: dict[str, dict[str, Any]] = {
         "provider": "openvino",
         "backend": "OpenVINO",
         "optimized": True,
+        "inference_device": "CPU",
+        "supported_openvino_devices": ["CPU", "GPU"],
+        "unsupported_openvino_devices": {
+            "NPU": "Este LLM OpenVINO foi exportado com shapes dinamicos; o compilador NPU exige shapes estaticos para este grafo.",
+        },
         "hf_model_id": "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B",
         "local_dir": OPENVINO_MODELS_DIR / "deepseek-r1-distill-qwen-1.5b",
         "description": "Mesmo DeepSeek, convertido para execucao otimizada com OpenVINO.",
@@ -103,11 +122,18 @@ MODEL_CATALOG: dict[str, dict[str, Any]] = {
 }
 
 _TRANSFORMERS_CACHE: dict[str, tuple[Any, Any]] = {}
-_OPENVINO_CACHE: dict[str, tuple[Any, Any]] = {}
+_OPENVINO_CACHE: dict[tuple[str, str], tuple[Any, Any]] = {}
 
 
 def listar_modelos() -> list[dict[str, Any]]:
     return [_serializar_modelo(model_id) for model_id in MODEL_CATALOG]
+
+
+def obter_hardware() -> dict[str, Any]:
+    return {
+        "cpu": _obter_cpu_snapshot(),
+        "openvino_available_devices": _obter_dispositivos_openvino(),
+    }
 
 
 def instalar_modelo(model_id: str) -> dict[str, Any]:
@@ -123,15 +149,21 @@ def instalar_modelo(model_id: str) -> dict[str, Any]:
         return _serializar_modelo(model_id)
 
     _instalar_openvino(config)
-    _OPENVINO_CACHE.pop(model_id, None)
+    for cache_key in list(_OPENVINO_CACHE):
+        if cache_key[0] == model_id:
+            _OPENVINO_CACHE.pop(cache_key, None)
     return _serializar_modelo(model_id)
 
 
-def gerar(prompt: str, model_id: str = "ollama-llama3") -> dict[str, Any]:
+def gerar(
+    prompt: str,
+    model_id: str = "ollama-llama3",
+    inference_device: str | None = None,
+) -> dict[str, Any]:
     config = _obter_config(model_id)
 
     if config["provider"] == "openvino":
-        return gerar_openvino(prompt, model_id)
+        return gerar_openvino(prompt, model_id, inference_device)
 
     if config["provider"] == "transformers":
         return gerar_transformers(prompt, model_id)
@@ -141,6 +173,7 @@ def gerar(prompt: str, model_id: str = "ollama-llama3") -> dict[str, Any]:
 
 def gerar_ollama(prompt: str, model_id: str = "ollama-llama3") -> dict[str, Any]:
     config = _obter_config(model_id)
+    monitor = _iniciar_monitoramento_cpu()
     start = time.time()
 
     response = requests.post(
@@ -159,7 +192,14 @@ def gerar_ollama(prompt: str, model_id: str = "ollama-llama3") -> dict[str, Any]
     generated_tokens = data.get("eval_count") or _estimar_tokens(data.get("response", ""))
     tokens_per_second = _calcular_tokens_por_segundo(generated_tokens, latency)
 
-    return _montar_resposta(data.get("response", ""), latency, generated_tokens, tokens_per_second, model_id)
+    return _montar_resposta(
+        data.get("response", ""),
+        latency,
+        generated_tokens,
+        tokens_per_second,
+        model_id,
+        _finalizar_monitoramento_cpu(monitor, latency),
+    )
 
 
 def gerar_transformers(prompt: str, model_id: str) -> dict[str, Any]:
@@ -174,6 +214,7 @@ def gerar_transformers(prompt: str, model_id: str) -> dict[str, Any]:
     model, tokenizer = _carregar_transformers(model_id)
     input_text = _formatar_prompt(tokenizer, prompt)
     inputs = tokenizer(input_text, return_tensors="pt")
+    monitor = _iniciar_monitoramento_cpu()
     start = time.time()
 
     output_ids = model.generate(**inputs, max_new_tokens=256, do_sample=False)
@@ -183,11 +224,20 @@ def gerar_transformers(prompt: str, model_id: str) -> dict[str, Any]:
     text = tokenizer.decode(generated_ids[0], skip_special_tokens=True).strip()
     tokens_per_second = _calcular_tokens_por_segundo(generated_tokens, latency)
 
-    return _montar_resposta(text, latency, generated_tokens, tokens_per_second, model_id)
+    return _montar_resposta(
+        text,
+        latency,
+        generated_tokens,
+        tokens_per_second,
+        model_id,
+        _finalizar_monitoramento_cpu(monitor, latency),
+    )
 
 
-def gerar_openvino(prompt: str, model_id: str) -> dict[str, Any]:
+def gerar_openvino(prompt: str, model_id: str, inference_device: str | None = None) -> dict[str, Any]:
     config = _obter_config(model_id)
+    device = _normalizar_dispositivo_openvino(inference_device or config["inference_device"])
+    _validar_dispositivo_modelo_openvino(config, device)
 
     if not _modelo_openvino_instalado(config):
         raise RuntimeError(
@@ -195,9 +245,10 @@ def gerar_openvino(prompt: str, model_id: str) -> dict[str, Any]:
             "Instale pela sidebar antes de usar."
         )
 
-    model, tokenizer = _carregar_openvino(model_id)
+    model, tokenizer = _carregar_openvino(model_id, device)
     input_text = _formatar_prompt(tokenizer, prompt)
     inputs = tokenizer(input_text, return_tensors="pt")
+    monitor = _iniciar_monitoramento_cpu()
     start = time.time()
 
     output_ids = model.generate(**inputs, max_new_tokens=256, do_sample=False)
@@ -207,7 +258,15 @@ def gerar_openvino(prompt: str, model_id: str) -> dict[str, Any]:
     text = tokenizer.decode(generated_ids[0], skip_special_tokens=True).strip()
     tokens_per_second = _calcular_tokens_por_segundo(generated_tokens, latency)
 
-    return _montar_resposta(text, latency, generated_tokens, tokens_per_second, model_id)
+    return _montar_resposta(
+        text,
+        latency,
+        generated_tokens,
+        tokens_per_second,
+        model_id,
+        _finalizar_monitoramento_cpu(monitor, latency),
+        device,
+    )
 
 
 def _instalar_transformers(config: dict[str, Any]) -> None:
@@ -262,9 +321,10 @@ def _carregar_transformers(model_id: str) -> tuple[Any, Any]:
     return model, tokenizer
 
 
-def _carregar_openvino(model_id: str) -> tuple[Any, Any]:
-    if model_id in _OPENVINO_CACHE:
-        return _OPENVINO_CACHE[model_id]
+def _carregar_openvino(model_id: str, device: str) -> tuple[Any, Any]:
+    cache_key = (model_id, device)
+    if cache_key in _OPENVINO_CACHE:
+        return _OPENVINO_CACHE[cache_key]
 
     _validar_dependencias_openvino()
 
@@ -275,8 +335,8 @@ def _carregar_openvino(model_id: str) -> tuple[Any, Any]:
     local_dir = Path(config["local_dir"])
 
     tokenizer = AutoTokenizer.from_pretrained(local_dir, trust_remote_code=True)
-    model = OVModelForCausalLM.from_pretrained(local_dir, device="CPU", compile=True)
-    _OPENVINO_CACHE[model_id] = (model, tokenizer)
+    model = OVModelForCausalLM.from_pretrained(local_dir, device=device, compile=True)
+    _OPENVINO_CACHE[cache_key] = (model, tokenizer)
     return model, tokenizer
 
 
@@ -298,6 +358,8 @@ def _montar_resposta(
     generated_tokens: int,
     tokens_per_second: float,
     model_id: str,
+    cpu_metrics: dict[str, Any] | None = None,
+    inference_device: str | None = None,
 ) -> dict[str, Any]:
     config = _obter_config(model_id)
 
@@ -311,6 +373,11 @@ def _montar_resposta(
         "family_name": config["family_name"],
         "backend": config["backend"],
         "optimized": config["optimized"],
+        "inference_device": inference_device or config["inference_device"],
+        "hardware_metrics": {
+            "cpu": cpu_metrics or _obter_cpu_snapshot(),
+            "openvino_available_devices": _obter_dispositivos_openvino(),
+        },
     }
 
 
@@ -397,6 +464,100 @@ def _calcular_tokens_por_segundo(generated_tokens: int, latency: float) -> float
         return 0.0
 
     return generated_tokens / latency
+
+
+def _iniciar_monitoramento_cpu() -> dict[str, Any]:
+    try:
+        import psutil
+
+        process = psutil.Process()
+        return {
+            "process": process,
+            "start_times": process.cpu_times(),
+            "start": time.time(),
+        }
+    except Exception:
+        return {}
+
+
+def _finalizar_monitoramento_cpu(monitor: dict[str, Any], latency: float) -> dict[str, Any]:
+    snapshot = _obter_cpu_snapshot()
+    process = monitor.get("process")
+    start_times = monitor.get("start_times")
+    start = monitor.get("start")
+
+    if not process or not start_times or not start:
+        return snapshot
+
+    try:
+        import psutil
+
+        end_times = process.cpu_times()
+        elapsed = max(time.time() - start, latency, 0.001)
+        cpu_time = (end_times.user - start_times.user) + (end_times.system - start_times.system)
+        cpu_count = psutil.cpu_count() or 1
+        snapshot["backend_process_cpu_percent"] = round((cpu_time / elapsed / cpu_count) * 100, 1)
+    except Exception:
+        pass
+
+    return snapshot
+
+
+def _obter_cpu_snapshot() -> dict[str, Any]:
+    try:
+        import psutil
+
+        memory = psutil.virtual_memory()
+        return {
+            "system_cpu_percent": psutil.cpu_percent(interval=0.1),
+            "physical_cores": psutil.cpu_count(logical=False),
+            "logical_cores": psutil.cpu_count(logical=True),
+            "memory_percent": memory.percent,
+            "memory_used_gb": round(memory.used / (1024**3), 2),
+            "memory_total_gb": round(memory.total / (1024**3), 2),
+        }
+    except Exception as exc:
+        return {"error": str(exc)}
+
+
+def _obter_dispositivos_openvino() -> list[str]:
+    try:
+        import openvino as ov
+
+        return list(ov.Core().available_devices)
+    except Exception:
+        return []
+
+
+def _normalizar_dispositivo_openvino(device: str) -> str:
+    normalized = device.upper().strip()
+    available_devices = _obter_dispositivos_openvino()
+
+    if normalized not in available_devices:
+        detected = ", ".join(available_devices) if available_devices else "nenhum"
+        raise RuntimeError(
+            f"Dispositivo OpenVINO indisponivel: {normalized}. "
+            f"Detectados: {detected}."
+        )
+
+    return normalized
+
+
+def _validar_dispositivo_modelo_openvino(config: dict[str, Any], device: str) -> None:
+    supported_devices = config.get("supported_openvino_devices")
+    if not supported_devices or device in supported_devices:
+        return
+
+    unsupported_reason = config.get("unsupported_openvino_devices", {}).get(
+        device,
+        "Este modelo nao foi validado para este dispositivo.",
+    )
+    supported = ", ".join(supported_devices)
+    raise RuntimeError(
+        f"{device} foi detectado pelo OpenVINO, mas nao esta habilitado para "
+        f"{config['name']} neste app. Motivo: {unsupported_reason} "
+        f"Use um destes dispositivos para esta variante: {supported}."
+    )
 
 
 def _estimar_tokens(text: str) -> int:

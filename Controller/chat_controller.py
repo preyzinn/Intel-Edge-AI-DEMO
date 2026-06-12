@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from Model.ai_engine import gerar, instalar_modelo, listar_modelos
+from Model.ai_engine import gerar, instalar_modelo, listar_modelos, obter_hardware
 
 
 router = APIRouter()
@@ -10,11 +10,17 @@ router = APIRouter()
 class ChatRequest(BaseModel):
     prompt: str
     model_id: str = "ollama-llama3"
+    inference_device: str | None = None
 
 
 @router.get("/models")
 def models():
     return {"models": listar_modelos()}
+
+
+@router.get("/hardware")
+def hardware():
+    return obter_hardware()
 
 
 @router.post("/models/{model_id}/install")
@@ -28,7 +34,7 @@ def install_model(model_id: str):
 @router.post("/chat")
 def chat(request: ChatRequest):
     try:
-        answer = gerar(request.prompt, request.model_id)
+        answer = gerar(request.prompt, request.model_id, request.inference_device)
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -42,4 +48,6 @@ def chat(request: ChatRequest):
         "family_name": answer["family_name"],
         "backend": answer["backend"],
         "optimized": answer["optimized"],
+        "inference_device": answer["inference_device"],
+        "hardware_metrics": answer["hardware_metrics"],
     }

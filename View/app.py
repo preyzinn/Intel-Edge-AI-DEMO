@@ -14,6 +14,7 @@ st.set_page_config(
 API_BASE_URL = "http://127.0.0.1:8000"
 API_URL = f"{API_BASE_URL}/chat"
 MODELS_URL = f"{API_BASE_URL}/models"
+HARDWARE_URL = f"{API_BASE_URL}/hardware"
 
 
 def is_backend_online() -> bool:
@@ -31,6 +32,15 @@ def fetch_models() -> list[dict]:
         return response.json().get("models", [])
     except requests.exceptions.RequestException:
         return []
+
+
+def fetch_hardware() -> dict:
+    try:
+        response = requests.get(HARDWARE_URL, timeout=5)
+        response.raise_for_status()
+        return response.json()
+    except requests.exceptions.RequestException:
+        return {}
 
 
 def install_model(model_id: str) -> tuple[bool, str]:
@@ -90,13 +100,17 @@ def install_missing_models_with_progress(missing_models: list[dict]) -> tuple[bo
     return True, "Variantes instaladas."
 
 
-def call_chat(prompt: str, model_id: str) -> dict:
+def call_chat(prompt: str, model_id: str, inference_device: str | None = None) -> dict:
+    payload = {
+        "prompt": prompt,
+        "model_id": model_id,
+    }
+    if inference_device:
+        payload["inference_device"] = inference_device
+
     response = requests.post(
         API_URL,
-        json={
-            "prompt": prompt,
-            "model_id": model_id,
-        },
+        json=payload,
         timeout=120,
     )
     response.raise_for_status()
@@ -120,9 +134,26 @@ def format_variant_label(model: dict) -> str:
     return model["backend"]
 
 
+def get_openvino_device_options(model: dict, detected_devices: list[str]) -> tuple[list[str], dict[str, str]]:
+    supported_devices = model.get("supported_openvino_devices") or detected_devices or ["CPU"]
+    unsupported_devices = model.get("unsupported_openvino_devices", {})
+    device_options = [device for device in detected_devices if device in supported_devices]
+
+    if not device_options:
+        device_options = [device for device in supported_devices if device in detected_devices]
+
+    if not device_options:
+        device_options = ["CPU"]
+
+    return device_options, unsupported_devices
+
+
 def render_metrics_chart(metrics: list[dict], family_name: str | None) -> None:
+    st.subheader("Performance")
+
     if not metrics:
         st.caption("Execute um prompt para gerar metricas.")
+        render_current_hardware_status()
         return
 
     df = pd.DataFrame(metrics)
@@ -135,7 +166,6 @@ def render_metrics_chart(metrics: list[dict], family_name: str | None) -> None:
 
     latest = df.sort_values("prompt_id").groupby("label", as_index=False).tail(1)
 
-    st.subheader("Performance")
     st.caption("Atualiza a cada prompt da familia selecionada.")
 
     latency_df = latest.pivot_table(
@@ -160,6 +190,74 @@ def render_metrics_chart(metrics: list[dict], family_name: str | None) -> None:
         st.caption("Latencia")
         st.bar_chart(latency_df)
 
+    cpu_columns = [
+        column
+        for column in ("backend_process_cpu_percent", "system_cpu_percent")
+        if column in latest.columns and latest[column].notna().any()
+    ]
+    if cpu_columns:
+        cpu_df = latest.pivot_table(
+            index="label",
+            values=cpu_columns,
+            aggfunc="last",
+        )
+        st.caption("CPU (%)")
+        st.bar_chart(cpu_df)
+
+    render_hardware_status(latest)
+
+
+def render_hardware_status(latest: pd.DataFrame) -> None:
+    latest_row = latest.iloc[-1].to_dict()
+    available_devices = latest_row.get("openvino_available_devices") or []
+    if isinstance(available_devices, str):
+        available_devices = [device.strip() for device in available_devices.split(",") if device.strip()]
+
+    inference_device = latest_row.get("inference_device", "Nao informado")
+    backend_cpu = latest_row.get("backend_process_cpu_percent")
+    system_cpu = latest_row.get("system_cpu_percent")
+    memory_percent = latest_row.get("memory_percent")
+
+    st.subheader("Hardware")
+
+    cpu_col, device_col = st.columns(2)
+    with cpu_col:
+        if pd.notna(backend_cpu):
+            st.metric("CPU backend", f"{backend_cpu:.1f}%")
+        elif pd.notna(system_cpu):
+            st.metric("CPU sistema", f"{system_cpu:.1f}%")
+        else:
+            st.metric("CPU", "N/D")
+
+        if pd.notna(memory_percent):
+            st.caption(f"Memoria do sistema: {memory_percent:.1f}%")
+
+    with device_col:
+        st.metric("Dispositivo da inferencia", inference_device)
+        if available_devices:
+            st.caption("OpenVINO detectou: " + ", ".join(available_devices))
+        else:
+            st.caption("OpenVINO nao retornou dispositivos.")
+
+    if "NPU" in available_devices and inference_device != "NPU":
+        st.info(f"NPU detectada, mas esta execucao esta usando {inference_device}.")
+    elif inference_device == "NPU":
+        st.success("Inferencia configurada para NPU.")
+
+
+def render_current_hardware_status() -> None:
+    hardware = fetch_hardware()
+    cpu = hardware.get("cpu", {})
+    row = {
+        "label": "Sistema",
+        "inference_device": "Aguardando execucao",
+        "openvino_available_devices": hardware.get("openvino_available_devices", []),
+        "system_cpu_percent": cpu.get("system_cpu_percent"),
+        "backend_process_cpu_percent": None,
+        "memory_percent": cpu.get("memory_percent"),
+    }
+    render_hardware_status(pd.DataFrame([row]))
+
 
 if "messages" not in st.session_state:
     st.session_state.messages = []
@@ -179,6 +277,9 @@ if "compare_variants" not in st.session_state:
 if "selected_model_id" not in st.session_state:
     st.session_state.selected_model_id = "openvino-deepseek-r1-qwen-1.5b"
 
+if "selected_inference_device" not in st.session_state:
+    st.session_state.selected_inference_device = "CPU"
+
 
 st.title("Intel Edge AI Assistant")
 
@@ -190,6 +291,8 @@ st.caption(f"Status: {status_icon} - {status_label}")
 st.divider()
 
 models = fetch_models() if backend_online else []
+hardware = fetch_hardware() if backend_online else {}
+openvino_devices = hardware.get("openvino_available_devices", [])
 models_by_id = {model["id"]: model for model in models}
 families = group_models_by_family(models)
 
@@ -260,6 +363,50 @@ with st.sidebar:
 
         status = "Instalado" if selected_model["installed"] else "Nao instalado"
         optimization = "com OpenVINO" if selected_model["optimized"] else "sem OpenVINO"
+        selected_inference_device = selected_model.get("inference_device", "Nao informado")
+
+        if selected_model["provider"] == "openvino" or (
+            st.session_state.compare_variants and has_openvino
+        ):
+            openvino_model_for_device = (
+                selected_model
+                if selected_model["provider"] == "openvino"
+                else next((model for model in family_models if model["provider"] == "openvino"), selected_model)
+            )
+            device_options, unsupported_devices = get_openvino_device_options(
+                openvino_model_for_device,
+                openvino_devices,
+            )
+            if st.session_state.selected_inference_device not in device_options:
+                st.session_state.selected_inference_device = (
+                    "CPU" if "CPU" in device_options else device_options[0]
+                )
+
+            st.session_state.selected_inference_device = st.selectbox(
+                "Onde executar OpenVINO",
+                options=device_options,
+                index=device_options.index(st.session_state.selected_inference_device),
+                help="Dispositivos detectados pelo OpenVINO neste PC.",
+            )
+            selected_inference_device = st.session_state.selected_inference_device
+            unavailable_detected_devices = [
+                device
+                for device in openvino_devices
+                if device in unsupported_devices and device not in device_options
+            ]
+            if unavailable_detected_devices:
+                for device in unavailable_detected_devices:
+                    st.warning(
+                        f"{device} detectado, mas indisponivel para esta variante: "
+                        f"{unsupported_devices[device]}"
+                    )
+        elif selected_model["provider"] == "transformers":
+            selected_inference_device = "CPU"
+            st.caption("Transformers/PyTorch neste app esta configurado para CPU.")
+        elif selected_model["provider"] == "ollama":
+            selected_inference_device = "Ollama runtime"
+            st.caption("O device do Ollama e controlado pelo proprio Ollama.")
+
         comparison_models = [
             model
             for model in family_models
@@ -272,6 +419,9 @@ with st.sidebar:
         )
 
         st.caption(f"Execucao: {selected_model['backend']} ({optimization})")
+        st.caption(f"Dispositivo configurado: {selected_inference_device}")
+        if openvino_devices:
+            st.caption("OpenVINO detectou: " + ", ".join(openvino_devices))
         st.caption(f"Status: {status}")
         st.write(selected_model["description"])
 
@@ -378,7 +528,12 @@ if prompt:
                     )
 
                     for variant, response_container in zip(variants_to_run, response_containers):
-                        data = call_chat(prompt, variant["id"])
+                        requested_device = (
+                            st.session_state.selected_inference_device
+                            if variant["provider"] == "openvino"
+                            else None
+                        )
+                        data = call_chat(prompt, variant["id"], requested_device)
                         answer = data.get("response", "Nenhuma resposta retornada.")
                         latency = float(data.get("latency", 0.0))
                         generated_tokens = int(data.get("generated_tokens", 0))
@@ -386,7 +541,18 @@ if prompt:
                         backend = data.get("backend", variant.get("backend", ""))
                         optimized = bool(data.get("optimized", False))
                         family_name = data.get("family_name", variant["family_name"])
-                        label = f"{backend} ({'OpenVINO' if optimized else 'base'})"
+                        inference_device = data.get(
+                            "inference_device",
+                            variant.get("inference_device", "Nao informado"),
+                        )
+                        hardware_metrics = data.get("hardware_metrics", {})
+                        cpu_metrics = hardware_metrics.get("cpu", {})
+                        openvino_devices = hardware_metrics.get("openvino_available_devices", [])
+                        label = (
+                            f"{backend} ({inference_device})"
+                            if optimized
+                            else f"{backend} (base)"
+                        )
 
                         with response_container:
                             if len(variants_to_run) > 1:
@@ -398,11 +564,13 @@ if prompt:
                                 f"{tokens_per_second:.2f} tokens/s"
                             )
                             st.caption(f"Modelo: {family_name} ({backend})")
+                            st.caption(f"Dispositivo: {inference_device}")
 
                         rendered_answers.append(
                             f"{label}\n{answer}\n"
                             f"{latency:.2f}s | {generated_tokens} tokens | "
-                            f"{tokens_per_second:.2f} tokens/s"
+                            f"{tokens_per_second:.2f} tokens/s | "
+                            f"dispositivo: {inference_device}"
                         )
                         st.session_state.metrics.append(
                             {
@@ -412,6 +580,13 @@ if prompt:
                                 "latency": latency,
                                 "generated_tokens": generated_tokens,
                                 "tokens_per_second": tokens_per_second,
+                                "inference_device": inference_device,
+                                "system_cpu_percent": cpu_metrics.get("system_cpu_percent"),
+                                "backend_process_cpu_percent": cpu_metrics.get(
+                                    "backend_process_cpu_percent"
+                                ),
+                                "memory_percent": cpu_metrics.get("memory_percent"),
+                                "openvino_available_devices": openvino_devices,
                             }
                         )
 
