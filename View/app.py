@@ -227,19 +227,6 @@ with st.sidebar:
         family_models = families[selected_family_id]
         has_openvino = any(model["provider"] == "openvino" for model in family_models)
         has_transformers = any(model["provider"] == "transformers" for model in family_models)
-
-        if has_openvino and has_transformers:
-            st.session_state.compare_variants = st.toggle(
-                "Comparar base vs OpenVINO",
-                value=st.session_state.compare_variants,
-            )
-        elif has_openvino:
-            st.session_state.compare_variants = False
-            st.info("Esta familia so tem variante OpenVINO neste app.")
-        else:
-            st.session_state.compare_variants = False
-            st.info("Esta familia nao tem variante OpenVINO neste app.")
-
         family_model_ids = [model["id"] for model in family_models]
         if st.session_state.selected_model_id not in family_model_ids:
             default_model = next(
@@ -258,6 +245,18 @@ with st.sidebar:
         )
         st.session_state.selected_model_id = selected_model_id
         selected_model = models_by_id[selected_model_id]
+
+        if has_openvino and has_transformers:
+            st.session_state.compare_variants = st.toggle(
+                "Comparar base vs OpenVINO",
+                value=st.session_state.compare_variants,
+            )
+        elif has_openvino:
+            st.session_state.compare_variants = False
+            st.info("Esta familia so tem variante OpenVINO neste app.")
+        else:
+            st.session_state.compare_variants = False
+            st.info("Esta familia nao tem variante OpenVINO neste app.")
 
         status = "Instalado" if selected_model["installed"] else "Nao instalado"
         optimization = "com OpenVINO" if selected_model["optimized"] else "sem OpenVINO"
