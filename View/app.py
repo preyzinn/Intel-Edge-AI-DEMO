@@ -80,6 +80,16 @@ def install_model_with_progress(model_id: str) -> tuple[bool, str]:
     return ok, message
 
 
+def install_missing_models_with_progress(missing_models: list[dict]) -> tuple[bool, str]:
+    for index, model in enumerate(missing_models, start=1):
+        st.caption(f"Instalando {index}/{len(missing_models)}: {model['backend']}")
+        ok, message = install_model_with_progress(model["id"])
+        if not ok:
+            return False, f"{model['backend']}: {message}"
+
+    return True, "Variantes instaladas."
+
+
 def call_chat(prompt: str, model_id: str) -> dict:
     response = requests.post(
         API_URL,
@@ -111,7 +121,7 @@ def pick_model_variant(family_models: list[dict], use_openvino: bool) -> dict:
 
 def render_metrics_chart(metrics: list[dict], family_name: str | None) -> None:
     if not metrics:
-        st.info("Execute pelo menos uma pergunta para gerar metricas.")
+        st.caption("Execute um prompt para gerar metricas.")
         return
 
     df = pd.DataFrame(metrics)
@@ -119,30 +129,35 @@ def render_metrics_chart(metrics: list[dict], family_name: str | None) -> None:
         df = df[df["family"] == family_name]
 
     if df.empty:
-        st.info("Ainda nao ha metricas para a familia selecionada.")
+        st.caption("Ainda nao ha metricas para esta familia.")
         return
 
     latest = df.sort_values("prompt_id").groupby("label", as_index=False).tail(1)
 
-    st.subheader("Comparacao de performance")
-    st.caption("Execute uma pergunta sem OpenVINO e outra com OpenVINO para comparar as ultimas medicoes.")
+    st.subheader("Performance")
+    st.caption("Atualiza a cada prompt da familia selecionada.")
 
-    tokens_df = latest.pivot_table(
-        index="label",
-        values="tokens_per_second",
-        aggfunc="last",
-    )
     latency_df = latest.pivot_table(
         index="label",
         values="latency",
         aggfunc="last",
     )
 
-    st.write("Tokens por segundo")
-    st.bar_chart(tokens_df)
+    tokens_df = latest.pivot_table(
+        index="label",
+        values="tokens_per_second",
+        aggfunc="last",
+    )
 
-    st.write("Latencia em segundos")
-    st.bar_chart(latency_df)
+    tokens_col, latency_col = st.columns(2)
+
+    with tokens_col:
+        st.caption("Tokens/s")
+        st.bar_chart(tokens_df)
+
+    with latency_col:
+        st.caption("Latencia")
+        st.bar_chart(latency_df)
 
 
 if "messages" not in st.session_state:
@@ -181,6 +196,7 @@ if st.session_state.selected_family_id not in families and families:
     st.session_state.selected_family_id = next(iter(families))
 
 selected_model = None
+metrics_container = None
 
 with st.sidebar:
     st.header("Configuracao")
@@ -232,20 +248,44 @@ with st.sidebar:
         selected_model = pick_model_variant(family_models, st.session_state.use_openvino)
         status = "Instalado" if selected_model["installed"] else "Nao instalado"
         optimization = "com OpenVINO" if selected_model["optimized"] else "sem OpenVINO"
+        comparison_models = [
+            model
+            for model in family_models
+            if model["provider"] in {"transformers", "openvino"}
+        ]
+        install_targets = (
+            [model for model in comparison_models if not model["installed"]]
+            if st.session_state.compare_variants
+            else ([selected_model] if not selected_model["installed"] else [])
+        )
 
         st.caption(f"Execucao: {selected_model['backend']} ({optimization})")
         st.caption(f"Status: {status}")
         st.write(selected_model["description"])
 
-        if not selected_model["installed"]:
-            if st.button("Instalar variante selecionada", use_container_width=True):
-                ok, message = install_model_with_progress(selected_model["id"])
+        if st.session_state.compare_variants:
+            missing_labels = [model["backend"] for model in install_targets]
+            if missing_labels:
+                st.warning("Faltam variantes para comparar: " + ", ".join(missing_labels))
+
+        if install_targets:
+            button_label = (
+                "Instalar variantes faltantes"
+                if st.session_state.compare_variants
+                else "Instalar variante selecionada"
+            )
+            if st.button(button_label, use_container_width=True):
+                ok, message = install_missing_models_with_progress(install_targets)
 
                 if ok:
                     st.success(message)
                     st.rerun()
                 else:
                     st.error(message)
+
+    st.divider()
+
+    metrics_container = st.container()
 
     st.divider()
 
@@ -316,8 +356,13 @@ if prompt:
             with st.spinner("Processando..."):
                 try:
                     rendered_answers = []
+                    response_containers = (
+                        st.columns(len(variants_to_run))
+                        if len(variants_to_run) > 1
+                        else [st.container()]
+                    )
 
-                    for variant in variants_to_run:
+                    for variant, response_container in zip(variants_to_run, response_containers):
                         data = call_chat(prompt, variant["id"])
                         answer = data.get("response", "Nenhuma resposta retornada.")
                         latency = float(data.get("latency", 0.0))
@@ -328,15 +373,16 @@ if prompt:
                         family_name = data.get("family_name", variant["family_name"])
                         label = f"{backend} ({'OpenVINO' if optimized else 'base'})"
 
-                        if len(variants_to_run) > 1:
-                            st.markdown(f"**{label}**")
-                        st.write(answer)
-                        st.caption(
-                            f"{latency:.2f}s | "
-                            f"{generated_tokens} tokens | "
-                            f"{tokens_per_second:.2f} tokens/s"
-                        )
-                        st.caption(f"Modelo: {family_name} ({backend})")
+                        with response_container:
+                            if len(variants_to_run) > 1:
+                                st.markdown(f"**{label}**")
+                            st.write(answer)
+                            st.caption(
+                                f"{latency:.2f}s | "
+                                f"{generated_tokens} tokens | "
+                                f"{tokens_per_second:.2f} tokens/s"
+                            )
+                            st.caption(f"Modelo: {family_name} ({backend})")
 
                         rendered_answers.append(
                             f"{label}\n{answer}\n"
@@ -385,4 +431,6 @@ if prompt:
 
 
 active_family_name = selected_model["family_name"] if selected_model else None
-render_metrics_chart(st.session_state.metrics, active_family_name)
+if metrics_container is not None:
+    with metrics_container:
+        render_metrics_chart(st.session_state.metrics, active_family_name)
