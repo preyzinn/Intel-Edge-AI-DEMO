@@ -1,162 +1,185 @@
-# Intel Edge AI Assistant
+﻿# Intel Edge AI Demo
 
-A local Edge AI demo that connects a Streamlit chat interface to a FastAPI backend and an Ollama-hosted language model.
+Local application for demonstrating LLM inference in an Edge AI environment. The project combines a Streamlit chat interface, a FastAPI backend, and an AI engine that can run models through Ollama, Transformers/PyTorch, or OpenVINO.
 
-The project is organized with a simple MVC-style structure:
+The app focuses on comparing base model variants with OpenVINO-optimized variants, showing latency, tokens per second, CPU usage, memory usage, and detected OpenVINO devices.
 
-- `View/`: Streamlit user interface
-- `Controller/`: FastAPI route handlers
-- `Model/`: AI engine that calls Ollama
+## Key Features
 
-## Features
+- Local chat UI built with Streamlit.
+- FastAPI backend with endpoints for chat, models, installation, and hardware.
+- Model catalog defined in `Model/ai_engine.py`.
+- Ollama support for `llama3`.
+- Hugging Face model support with Transformers/PyTorch.
+- OpenVINO-exported model support through `optimum-intel`.
+- Model installation from the Streamlit sidebar.
+- Side-by-side comparison between base and OpenVINO variants.
+- OpenVINO device selection when available, such as CPU or GPU.
+- Per-prompt performance metric collection.
+- PowerShell launcher to start FastAPI and Streamlit together.
 
-- Chat-style web UI built with Streamlit
-- FastAPI backend with a `/chat` endpoint
-- Local inference through Ollama
-- Latency reporting for each assistant response
-- Conversation history stored in Streamlit session state
-- Basic error handling for API connection failures and timeouts
-
-## Project Structure
+## Architecture
 
 ```text
 edge ai test/
-+-- main.py
++-- main.py                  # Creates the FastAPI app and registers routes
++-- run_app.ps1              # PowerShell launcher for API + Streamlit
++-- Start_Edge_AI.exe        # Windows executable that calls the launcher
++-- Start_Edge_AI.cs         # Source code for the executable launcher
 +-- Controller/
-|   +-- chat_controller.py
+|   +-- chat_controller.py   # API HTTP routes
 +-- Model/
-|   +-- ai_engine.py
+|   +-- ai_engine.py         # Model catalog, installation, and inference
+|   +-- hf_models/           # Locally downloaded Transformers models
+|   +-- openvino_models/     # Locally exported OpenVINO models
 +-- View/
-    +-- app.py
+    +-- app.py               # Streamlit interface
 ```
 
 ## How It Works
 
-1. The user opens the Streamlit app in the browser.
-2. The user sends a message from the chat input.
-3. `View/app.py` sends a `POST` request to the FastAPI backend at `http://127.0.0.1:8000/chat`.
-4. `Controller/chat_controller.py` receives the JSON payload.
-5. The controller calls `gerar()` from `Model/ai_engine.py`.
-6. `ai_engine.py` sends the prompt to Ollama at `http://localhost:11434/api/generate`.
-7. Ollama returns a model response.
-8. FastAPI returns the response and latency to Streamlit.
-9. Streamlit displays the answer in the chat UI.
+1. The user opens Streamlit at `http://localhost:8501`.
+2. The interface calls the backend at `http://127.0.0.1:8000`.
+3. The sidebar loads model families through `GET /models`.
+4. The sidebar shows detected hardware through `GET /hardware`.
+5. If a variant is not installed yet, the user can install it through `POST /models/{model_id}/install`.
+6. When a prompt is submitted, Streamlit calls `POST /chat`.
+7. The backend calls `gerar()` in `Model/ai_engine.py`.
+8. The engine routes inference to Ollama, Transformers/PyTorch, or OpenVINO.
+9. The response returns text, latency, generated tokens, tokens/s, backend, device, and hardware metrics.
+10. Streamlit displays the answer and updates the performance charts.
+
+## Supported Models
+
+The catalog is defined in `MODEL_CATALOG` inside `Model/ai_engine.py`.
+
+| ID | Family | Backend | Optimized | Configured device |
+| --- | --- | --- | --- | --- |
+| `ollama-llama3` | Llama 3 | Ollama | No | Ollama runtime |
+| `hf-tinyllama` | TinyLlama 1.1B Chat | Transformers/PyTorch | No | CPU |
+| `openvino-tinyllama` | TinyLlama 1.1B Chat | OpenVINO | Yes | CPU/GPU |
+| `hf-qwen2.5-0.5b` | Qwen2.5 0.5B Instruct | Transformers/PyTorch | No | CPU |
+| `openvino-qwen2.5-0.5b` | Qwen2.5 0.5B Instruct | OpenVINO | Yes | CPU/GPU |
+| `hf-deepseek-r1-qwen-1.5b` | DeepSeek R1 Distill Qwen 1.5B | Transformers/PyTorch | No | CPU |
+| `openvino-deepseek-r1-qwen-1.5b` | DeepSeek R1 Distill Qwen 1.5B | OpenVINO | Yes | CPU/GPU |
+
+NPU note: the app may detect an NPU through OpenVINO, but the current OpenVINO variants block NPU execution because these LLMs were exported with dynamic shapes. `ai_engine.py` reports that the NPU compiler requires static shapes for this graph.
 
 ## Requirements
 
-- Python 3.10 or newer
-- Ollama installed and running
-- The `llama3` model available in Ollama
+- Windows with PowerShell to use `run_app.ps1` or `Start_Edge_AI.exe`.
+- Python 3.10 or newer.
+- Python virtual environment recommended.
+- Ollama installed if you want to use `ollama-llama3`.
+- Internet connection for the first Hugging Face model download.
+- Enough disk space for model weights.
 
-Python packages:
-
-- `fastapi`
-- `uvicorn`
-- `streamlit`
-- `requests`
-- `pydantic`
-
-## Setup
-
-### 1. Clone the Repository
+Python packages used by the project:
 
 ```bash
-git clone https://github.com/preyzinn/Intel-Edge-AI-DEMO
-cd "edge ai test"
+pip install fastapi uvicorn streamlit requests pydantic pandas psutil transformers torch openvino optimum-intel
 ```
 
-### 2. Create a Virtual Environment
+If you only use Ollama, the OpenVINO/Transformers packages are not required. To use Hugging Face and OpenVINO variants from the sidebar, install the full package set above.
 
-Windows PowerShell:
+## Environment Setup
+
+### 1. Create and activate a virtual environment
+
+PowerShell:
 
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 ```
 
-macOS/Linux:
+### 2. Install dependencies
 
-```bash
-python -m venv .venv
-source .venv/bin/activate
+```powershell
+python -m pip install --upgrade pip
+pip install fastapi uvicorn streamlit requests pydantic pandas psutil transformers torch openvino optimum-intel
 ```
 
-### 3. Install Dependencies
+### 3. Prepare Ollama, optional
 
-```bash
-pip install fastapi uvicorn streamlit requests pydantic
-```
+Required only for the `ollama-llama3` variant.
 
-### 4. Install and Start Ollama
-
-Install Ollama from:
-
-```text
-https://ollama.com
-```
-
-Pull the model used by this project:
-
-```bash
+```powershell
 ollama pull llama3
-```
-
-Start Ollama if it is not already running:
-
-```bash
 ollama serve
 ```
 
-## Running the Project
+If Ollama is already running as a service, you do not need to run `ollama serve` manually.
 
-This project needs two local servers running at the same time:
+## Running the App
 
-- FastAPI backend on port `8000`
-- Streamlit frontend on port `8501`
+### Option A: Windows launcher
 
-### 1. Start the Backend
+From the project root, run:
 
-From the project root:
-
-```bash
-uvicorn main:app --reload
+```powershell
+.\run_app.ps1
 ```
 
-Backend URL:
+Or open:
 
 ```text
-http://127.0.0.1:8000
+Start_Edge_AI.exe
 ```
 
-FastAPI interactive docs:
+The launcher starts:
 
-```text
-http://127.0.0.1:8000/docs
+- FastAPI at `http://127.0.0.1:8000`.
+- Streamlit at `http://localhost:8501`.
+
+It also writes logs to `.logs/` and stops child processes when you press `Ctrl+C`.
+
+### Option B: Manual execution
+
+Terminal 1, backend:
+
+```powershell
+uvicorn main:app --host 127.0.0.1 --port 8000
 ```
 
-### 2. Start the Streamlit App
+Terminal 2, frontend:
 
-Open a second terminal, activate the same virtual environment, then run:
-
-```bash
-streamlit run View/app.py
+```powershell
+streamlit run View/app.py --server.address localhost --server.port 8501
 ```
 
-Streamlit URL:
+Then open:
 
 ```text
 http://localhost:8501
 ```
 
-## API Reference
+## Using the Interface
 
-### Health Check
+In the Streamlit sidebar:
+
+- Choose the model family.
+- Choose the execution variant: base, OpenVINO, or Ollama.
+- Enable `Compare base vs OpenVINO` when the family has both variants.
+- Install the selected variant or the missing variants.
+- Choose the OpenVINO device when applicable.
+- Track tokens/s, latency, and CPU charts.
+
+In the chat:
+
+- Type a prompt.
+- Wait for inference.
+- Review the answer, time, generated tokens, tokens/s, backend, and device.
+
+## API
+
+### Health check
 
 ```http
 GET /
 ```
 
-Example response:
+Response:
 
 ```json
 {
@@ -164,119 +187,153 @@ Example response:
 }
 ```
 
-### Chat
+### List models
+
+```http
+GET /models
+```
+
+Returns the catalog models with installation status.
+
+### Get hardware
+
+```http
+GET /hardware
+```
+
+Returns CPU/memory metrics and detected OpenVINO devices.
+
+### Install model
+
+```http
+POST /models/{model_id}/install
+```
+
+Example:
+
+```powershell
+Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8000/models/openvino-qwen2.5-0.5b/install
+```
+
+### Send prompt
 
 ```http
 POST /chat
 ```
 
-Request body:
+Request example:
 
 ```json
 {
-  "prompt": "What is edge AI?"
+  "prompt": "Explain Edge AI in one sentence.",
+  "model_id": "openvino-qwen2.5-0.5b",
+  "inference_device": "CPU"
 }
 ```
 
-Example response:
+Response example:
 
 ```json
 {
-  "response": "Edge AI means running AI models locally on edge devices instead of relying only on cloud servers.",
-  "latency": 1.42
+  "response": "Edge AI is the execution of AI models close to where data is generated, reducing latency and cloud dependency.",
+  "latency": 3.12,
+  "generated_tokens": 32,
+  "tokens_per_second": 10.25,
+  "model_id": "openvino-qwen2.5-0.5b",
+  "family_id": "qwen2.5-0.5b",
+  "family_name": "Qwen2.5 0.5B Instruct",
+  "backend": "OpenVINO",
+  "optimized": true,
+  "inference_device": "CPU",
+  "hardware_metrics": {
+    "cpu": {},
+    "openvino_available_devices": ["CPU"]
+  }
 }
 ```
 
-## Main Files
+## Important Configuration
 
-### `View/app.py`
-
-Contains the Streamlit frontend. It renders the chat interface, stores chat history, sends user prompts to the backend, and displays the assistant response.
-
-### `Controller/chat_controller.py`
-
-Defines the FastAPI `/chat` route. It validates the incoming JSON request and calls the AI engine.
-
-### `Model/ai_engine.py`
-
-Handles communication with Ollama. It sends the prompt to the local Ollama API, waits for a response, measures latency, and returns the generated text.
-
-### `main.py`
-
-Creates the FastAPI app and registers the chat controller routes.
-
-## Configuration
-
-The Streamlit frontend calls this backend URL:
+Frontend URLs (`View/app.py`):
 
 ```python
-API_URL = "http://127.0.0.1:8000/chat"
+API_BASE_URL = "http://127.0.0.1:8000"
+API_URL = f"{API_BASE_URL}/chat"
+MODELS_URL = f"{API_BASE_URL}/models"
+HARDWARE_URL = f"{API_BASE_URL}/hardware"
 ```
 
-The AI engine calls this Ollama URL:
+Ollama URL (`Model/ai_engine.py`):
 
 ```python
 OLLAMA_URL = "http://localhost:11434/api/generate"
 ```
 
-The model is currently configured as:
+Local model directories:
 
-```python
-"model": "llama3"
+```text
+Model/hf_models/
+Model/openvino_models/
 ```
-
-To use a different Ollama model, update the `model` value in `Model/ai_engine.py` and make sure the model is installed locally with `ollama pull`.
 
 ## Troubleshooting
 
-### Streamlit says it cannot connect to the API
+### Backend offline in Streamlit
 
-Make sure the FastAPI backend is running:
+Start FastAPI:
 
-```bash
-uvicorn main:app --reload
+```powershell
+uvicorn main:app --host 127.0.0.1 --port 8000
 ```
 
-Then open:
+Then test:
 
 ```text
 http://127.0.0.1:8000
 ```
 
-### FastAPI returns an Ollama connection error
+### Error when using Ollama
 
-Make sure Ollama is installed and running:
+Verify that Ollama is installed, running, and has the model downloaded:
 
-```bash
+```powershell
+ollama list
+ollama pull llama3
 ollama serve
 ```
 
-Then confirm the model exists:
+### Hugging Face or OpenVINO model not installed
 
-```bash
-ollama list
+Install it from the sidebar or call the installation endpoint:
+
+```powershell
+Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8000/models/hf-qwen2.5-0.5b/install
+Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8000/models/openvino-qwen2.5-0.5b/install
 ```
 
-If `llama3` is missing, run:
+### OpenVINO does not detect GPU or NPU
 
-```bash
-ollama pull llama3
+Check the devices returned by:
+
+```text
+http://127.0.0.1:8000/hardware
 ```
 
-### The request times out
+Even if an NPU is detected, the current app variants only allow CPU/GPU for OpenVINO because of the dynamic-shape restriction in the exported LLMs.
 
-The app currently uses a `120` second timeout. Large models or slow hardware may take longer. You can increase the timeout in:
+### Response timeout
 
-- `View/app.py`
-- `Model/ai_engine.py`
+The frontend uses a `120` second timeout for `/chat`. Model installation uses a `1800` second timeout. Larger models or the first OpenVINO compilation may take longer.
 
-### The model returns an empty response
+### Port 8000 or 8501 already in use
 
-Check the Ollama response format and confirm the model is working directly:
+`run_app.ps1` attempts to restart old processes that belong to this app. If the port is used by another process, it prints a warning and does not kill the unknown process.
 
-```bash
-ollama run llama3
-```
+## Main Files
 
-
-
+- `View/app.py`: Streamlit interface, model selection, installation, chat, and charts.
+- `Controller/chat_controller.py`: HTTP endpoints and error handling.
+- `Model/ai_engine.py`: model catalog, local installation, inference, and metrics.
+- `main.py`: FastAPI bootstrap.
+- `run_app.ps1`: starts and monitors backend and frontend.
+- `Start_Edge_AI.exe`: Windows launcher for easier execution.
