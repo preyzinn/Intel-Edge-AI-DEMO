@@ -110,13 +110,14 @@ def group_models_by_family(models: list[dict]) -> dict[str, list[dict]]:
     return families
 
 
-def pick_model_variant(family_models: list[dict], use_openvino: bool) -> dict:
-    preferred_provider = "openvino" if use_openvino else "transformers"
-    for model in family_models:
-        if model["provider"] == preferred_provider:
-            return model
+def format_variant_label(model: dict) -> str:
+    if model["provider"] == "openvino":
+        return "OpenVINO otimizado"
 
-    return family_models[0]
+    if model["provider"] == "transformers":
+        return "Transformers/PyTorch"
+
+    return model["backend"]
 
 
 def render_metrics_chart(metrics: list[dict], family_name: str | None) -> None:
@@ -172,11 +173,11 @@ if "prompt_counter" not in st.session_state:
 if "selected_family_id" not in st.session_state:
     st.session_state.selected_family_id = "deepseek-r1-qwen-1.5b"
 
-if "use_openvino" not in st.session_state:
-    st.session_state.use_openvino = True
-
 if "compare_variants" not in st.session_state:
     st.session_state.compare_variants = False
+
+if "selected_model_id" not in st.session_state:
+    st.session_state.selected_model_id = "openvino-deepseek-r1-qwen-1.5b"
 
 
 st.title("Intel Edge AI Assistant")
@@ -228,24 +229,36 @@ with st.sidebar:
         has_transformers = any(model["provider"] == "transformers" for model in family_models)
 
         if has_openvino and has_transformers:
-            st.session_state.use_openvino = st.toggle(
-                "Usar modelo otimizado com OpenVINO",
-                value=st.session_state.use_openvino,
-            )
             st.session_state.compare_variants = st.toggle(
-                "Comparar sem e com OpenVINO",
+                "Comparar base vs OpenVINO",
                 value=st.session_state.compare_variants,
             )
         elif has_openvino:
-            st.session_state.use_openvino = True
             st.session_state.compare_variants = False
             st.info("Esta familia so tem variante OpenVINO neste app.")
         else:
-            st.session_state.use_openvino = False
             st.session_state.compare_variants = False
             st.info("Esta familia nao tem variante OpenVINO neste app.")
 
-        selected_model = pick_model_variant(family_models, st.session_state.use_openvino)
+        family_model_ids = [model["id"] for model in family_models]
+        if st.session_state.selected_model_id not in family_model_ids:
+            default_model = next(
+                (model for model in family_models if model["provider"] == "openvino"),
+                family_models[0],
+            )
+            st.session_state.selected_model_id = default_model["id"]
+
+        selected_model_id = st.selectbox(
+            "Variante de execucao",
+            options=family_model_ids,
+            index=family_model_ids.index(st.session_state.selected_model_id),
+            format_func=lambda model_id: format_variant_label(models_by_id[model_id]),
+            disabled=st.session_state.compare_variants,
+            help="Usada quando a comparacao esta desligada.",
+        )
+        st.session_state.selected_model_id = selected_model_id
+        selected_model = models_by_id[selected_model_id]
+
         status = "Instalado" if selected_model["installed"] else "Nao instalado"
         optimization = "com OpenVINO" if selected_model["optimized"] else "sem OpenVINO"
         comparison_models = [
@@ -262,6 +275,9 @@ with st.sidebar:
         st.caption(f"Execucao: {selected_model['backend']} ({optimization})")
         st.caption(f"Status: {status}")
         st.write(selected_model["description"])
+
+        if st.session_state.compare_variants:
+            st.caption("Comparacao ativa: o app vai executar base e OpenVINO.")
 
         if st.session_state.compare_variants:
             missing_labels = [model["backend"] for model in install_targets]
