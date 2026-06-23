@@ -1,4 +1,6 @@
 from fastapi import APIRouter, HTTPException
+from typing import Any
+
 from pydantic import BaseModel, Field
 
 from Model.ai_engine import gerar, instalar_modelo, listar_modelos, obter_hardware
@@ -11,7 +13,7 @@ class ChatRequest(BaseModel):
     prompt: str
     model_id: str = "ollama-llama3"
     inference_device: str | None = None
-    messages: list[dict[str, str]] = Field(default_factory=list)
+    messages: list[dict[str, Any]] = Field(default_factory=list)
 
 
 @router.get("/models")

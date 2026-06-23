@@ -131,7 +131,7 @@ def call_chat(
     payload = {
         "prompt": prompt,
         "model_id": model_id,
-        "messages": messages or [],
+        "messages": format_context_messages(messages or []),
     }
     if inference_device:
         payload["inference_device"] = inference_device
@@ -143,6 +143,22 @@ def call_chat(
     )
     response.raise_for_status()
     return response.json()
+
+
+def format_context_messages(messages: list[dict]) -> list[dict[str, str]]:
+    context_messages = []
+    for message in messages:
+        role = message.get("role")
+        content = message.get("content")
+        if role in {"user", "assistant"} and content:
+            context_messages.append(
+                {
+                    "role": str(role),
+                    "content": str(content),
+                }
+            )
+
+    return context_messages
 
 
 def group_models_by_family(models: list[dict]) -> dict[str, list[dict]]:
@@ -181,7 +197,6 @@ def render_metrics_chart(metrics: list[dict], family_name: str | None) -> None:
 
     if not metrics:
         st.caption("Execute um prompt para gerar metricas.")
-        render_current_hardware_status()
         return
 
     df = pd.DataFrame(metrics)
@@ -232,59 +247,39 @@ def render_metrics_chart(metrics: list[dict], family_name: str | None) -> None:
         st.caption("CPU (%)")
         st.bar_chart(cpu_df)
 
-    render_hardware_status(latest)
+@st.fragment(run_every="2s")
+def render_live_hardware_status(backend_online: bool) -> None:
+    st.subheader("Hardware em tempo real")
 
+    if not backend_online:
+        st.caption("Backend offline.")
+        return
 
-def render_hardware_status(latest: pd.DataFrame) -> None:
-    latest_row = latest.iloc[-1].to_dict()
-    available_devices = latest_row.get("openvino_available_devices") or []
-    if isinstance(available_devices, str):
-        available_devices = [device.strip() for device in available_devices.split(",") if device.strip()]
-
-    inference_device = latest_row.get("inference_device", "Nao informado")
-    backend_cpu = latest_row.get("backend_process_cpu_percent")
-    system_cpu = latest_row.get("system_cpu_percent")
-    memory_percent = latest_row.get("memory_percent")
-
-    st.subheader("Hardware")
-
-    cpu_col, device_col = st.columns(2)
-    with cpu_col:
-        if pd.notna(backend_cpu):
-            st.metric("CPU backend", f"{backend_cpu:.1f}%")
-        elif pd.notna(system_cpu):
-            st.metric("CPU sistema", f"{system_cpu:.1f}%")
-        else:
-            st.metric("CPU", "N/D")
-
-        if pd.notna(memory_percent):
-            st.caption(f"Memoria do sistema: {memory_percent:.1f}%")
-
-    with device_col:
-        st.metric("Dispositivo da inferencia", inference_device)
-        if available_devices:
-            st.caption("OpenVINO detectou: " + ", ".join(available_devices))
-        else:
-            st.caption("OpenVINO nao retornou dispositivos.")
-
-    if "NPU" in available_devices and inference_device != "NPU":
-        st.info(f"NPU detectada, mas esta execucao esta usando {inference_device}.")
-    elif inference_device == "NPU":
-        st.success("Inferencia configurada para NPU.")
-
-
-def render_current_hardware_status() -> None:
     hardware = fetch_hardware()
     cpu = hardware.get("cpu", {})
-    row = {
-        "label": "Sistema",
-        "inference_device": "Aguardando execucao",
-        "openvino_available_devices": hardware.get("openvino_available_devices", []),
-        "system_cpu_percent": cpu.get("system_cpu_percent"),
-        "backend_process_cpu_percent": None,
-        "memory_percent": cpu.get("memory_percent"),
-    }
-    render_hardware_status(pd.DataFrame([row]))
+    available_devices = hardware.get("openvino_available_devices", [])
+    system_cpu = cpu.get("system_cpu_percent")
+    memory_percent = cpu.get("memory_percent")
+
+    cpu_col, memory_col = st.columns(2)
+    with cpu_col:
+        if system_cpu is None:
+            st.metric("CPU sistema", "N/D")
+        else:
+            st.metric("CPU sistema", f"{float(system_cpu):.1f}%")
+
+    with memory_col:
+        if memory_percent is None:
+            st.metric("Memoria", "N/D")
+        else:
+            st.metric("Memoria", f"{float(memory_percent):.1f}%")
+
+    if available_devices:
+        st.caption("OpenVINO detectou: " + ", ".join(available_devices))
+    else:
+        st.caption("OpenVINO nao retornou dispositivos.")
+
+    st.caption("Atualiza a cada 2 segundos.")
 
 
 if "messages" not in st.session_state:
@@ -657,3 +652,5 @@ active_family_name = selected_model["family_name"] if selected_model else None
 if metrics_container is not None:
     with metrics_container:
         render_metrics_chart(st.session_state.metrics, active_family_name)
+        st.divider()
+        render_live_hardware_status(backend_online)
