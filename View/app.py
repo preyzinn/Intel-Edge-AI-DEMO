@@ -1,9 +1,31 @@
+import subprocess
+import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
 import pandas as pd
 import requests
 import streamlit as st
+from streamlit.runtime.scriptrunner import get_script_run_ctx
+
+
+if __name__ == "__main__" and get_script_run_ctx(suppress_warning=True) is None:
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "streamlit",
+            "run",
+            str(Path(__file__).resolve()),
+            "--server.address",
+            "localhost",
+            "--server.port",
+            "8501",
+        ],
+        check=False,
+    )
+    sys.exit()
 
 
 st.set_page_config(
@@ -100,10 +122,16 @@ def install_missing_models_with_progress(missing_models: list[dict]) -> tuple[bo
     return True, "Variantes instaladas."
 
 
-def call_chat(prompt: str, model_id: str, inference_device: str | None = None) -> dict:
+def call_chat(
+    prompt: str,
+    model_id: str,
+    inference_device: str | None = None,
+    messages: list[dict] | None = None,
+) -> dict:
     payload = {
         "prompt": prompt,
         "model_id": model_id,
+        "messages": messages or [],
     }
     if inference_device:
         payload["inference_device"] = inference_device
@@ -533,7 +561,12 @@ if prompt:
                             if variant["provider"] == "openvino"
                             else None
                         )
-                        data = call_chat(prompt, variant["id"], requested_device)
+                        data = call_chat(
+                            prompt,
+                            variant["id"],
+                            requested_device,
+                            st.session_state.messages,
+                        )
                         answer = data.get("response", "Nenhuma resposta retornada.")
                         latency = float(data.get("latency", 0.0))
                         generated_tokens = int(data.get("generated_tokens", 0))

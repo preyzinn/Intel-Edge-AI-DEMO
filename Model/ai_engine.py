@@ -159,20 +159,26 @@ def gerar(
     prompt: str,
     model_id: str = "ollama-llama3",
     inference_device: str | None = None,
+    messages: list[dict[str, str]] | None = None,
 ) -> dict[str, Any]:
     config = _obter_config(model_id)
 
     if config["provider"] == "openvino":
-        return gerar_openvino(prompt, model_id, inference_device)
+        return gerar_openvino(prompt, model_id, inference_device, messages)
 
     if config["provider"] == "transformers":
-        return gerar_transformers(prompt, model_id)
+        return gerar_transformers(prompt, model_id, messages)
 
-    return gerar_ollama(prompt, model_id)
+    return gerar_ollama(prompt, model_id, messages)
 
 
-def gerar_ollama(prompt: str, model_id: str = "ollama-llama3") -> dict[str, Any]:
+def gerar_ollama(
+    prompt: str,
+    model_id: str = "ollama-llama3",
+    messages: list[dict[str, str]] | None = None,
+) -> dict[str, Any]:
     config = _obter_config(model_id)
+    input_text = _formatar_prompt_texto(prompt, messages)
     monitor = _iniciar_monitoramento_cpu()
     start = time.time()
 
@@ -180,7 +186,7 @@ def gerar_ollama(prompt: str, model_id: str = "ollama-llama3") -> dict[str, Any]
         OLLAMA_URL,
         json={
             "model": config["model"],
-            "prompt": prompt,
+            "prompt": input_text,
             "stream": False,
         },
         timeout=120,
@@ -202,7 +208,11 @@ def gerar_ollama(prompt: str, model_id: str = "ollama-llama3") -> dict[str, Any]
     )
 
 
-def gerar_transformers(prompt: str, model_id: str) -> dict[str, Any]:
+def gerar_transformers(
+    prompt: str,
+    model_id: str,
+    messages: list[dict[str, str]] | None = None,
+) -> dict[str, Any]:
     config = _obter_config(model_id)
 
     if not _modelo_transformers_instalado(config):
@@ -212,7 +222,7 @@ def gerar_transformers(prompt: str, model_id: str) -> dict[str, Any]:
         )
 
     model, tokenizer = _carregar_transformers(model_id)
-    input_text = _formatar_prompt(tokenizer, prompt)
+    input_text = _formatar_prompt(tokenizer, prompt, messages)
     inputs = tokenizer(input_text, return_tensors="pt")
     monitor = _iniciar_monitoramento_cpu()
     start = time.time()
@@ -234,7 +244,12 @@ def gerar_transformers(prompt: str, model_id: str) -> dict[str, Any]:
     )
 
 
-def gerar_openvino(prompt: str, model_id: str, inference_device: str | None = None) -> dict[str, Any]:
+def gerar_openvino(
+    prompt: str,
+    model_id: str,
+    inference_device: str | None = None,
+    messages: list[dict[str, str]] | None = None,
+) -> dict[str, Any]:
     config = _obter_config(model_id)
     device = _normalizar_dispositivo_openvino(inference_device or config["inference_device"])
     _validar_dispositivo_modelo_openvino(config, device)
@@ -246,7 +261,7 @@ def gerar_openvino(prompt: str, model_id: str, inference_device: str | None = No
         )
 
     model, tokenizer = _carregar_openvino(model_id, device)
-    input_text = _formatar_prompt(tokenizer, prompt)
+    input_text = _formatar_prompt(tokenizer, prompt, messages)
     inputs = tokenizer(input_text, return_tensors="pt")
     monitor = _iniciar_monitoramento_cpu()
     start = time.time()
@@ -340,16 +355,53 @@ def _carregar_openvino(model_id: str, device: str) -> tuple[Any, Any]:
     return model, tokenizer
 
 
-def _formatar_prompt(tokenizer: Any, prompt: str) -> str:
+def _normalizar_mensagens(
+    prompt: str,
+    messages: list[dict[str, str]] | None = None,
+) -> list[dict[str, str]]:
+    normalized: list[dict[str, str]] = []
+    for message in messages or []:
+        role = message.get("role")
+        content = str(message.get("content", "")).strip()
+        if role in {"user", "assistant"} and content:
+            normalized.append({"role": role, "content": content})
+
+    if not normalized or normalized[-1]["role"] != "user" or normalized[-1]["content"] != prompt:
+        normalized.append({"role": "user", "content": prompt})
+
+    return normalized[-12:]
+
+
+def _formatar_prompt_texto(
+    prompt: str,
+    messages: list[dict[str, str]] | None = None,
+) -> str:
+    normalized = _normalizar_mensagens(prompt, messages)
+    lines = []
+    for message in normalized:
+        speaker = "User" if message["role"] == "user" else "Assistant"
+        lines.append(f"{speaker}: {message['content']}")
+
+    if normalized[-1]["role"] == "user":
+        lines.append("Assistant:")
+
+    return "\n".join(lines)
+
+
+def _formatar_prompt(
+    tokenizer: Any,
+    prompt: str,
+    messages: list[dict[str, str]] | None = None,
+) -> str:
+    normalized = _normalizar_mensagens(prompt, messages)
     if getattr(tokenizer, "chat_template", None):
-        messages = [{"role": "user", "content": prompt}]
         return tokenizer.apply_chat_template(
-            messages,
+            normalized,
             tokenize=False,
             add_generation_prompt=True,
         )
 
-    return f"User: {prompt}\nAssistant:"
+    return _formatar_prompt_texto(prompt, normalized)
 
 
 def _montar_resposta(
