@@ -37,6 +37,7 @@ API_BASE_URL = "http://127.0.0.1:8000"
 API_URL = f"{API_BASE_URL}/chat"
 MODELS_URL = f"{API_BASE_URL}/models"
 HARDWARE_URL = f"{API_BASE_URL}/hardware"
+HF_MODEL_SEARCH_URL = "https://huggingface.co/api/models"
 
 
 def is_backend_online() -> bool:
@@ -63,6 +64,37 @@ def fetch_hardware() -> dict:
         return response.json()
     except requests.exceptions.RequestException:
         return {}
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def search_hugging_face_openvino_models(query: str, limit: int = 12) -> list[dict]:
+    if len(query.strip()) < 2:
+        return []
+
+    try:
+        response = requests.get(
+            HF_MODEL_SEARCH_URL,
+            params={
+                "search": query.strip(),
+                "filter": "openvino",
+                "sort": "downloads",
+                "direction": -1,
+                "limit": limit,
+            },
+            timeout=10,
+        )
+        response.raise_for_status()
+    except requests.exceptions.RequestException:
+        return []
+
+    results = []
+    for model in response.json():
+        tags = model.get("tags") or []
+        library_name = model.get("library_name")
+        if library_name == "openvino" or "openvino" in tags:
+            results.append(model)
+
+    return results
 
 
 def install_model(model_id: str) -> tuple[bool, str]:
@@ -176,6 +208,11 @@ def format_variant_label(model: dict) -> str:
         return "Transformers/PyTorch"
 
     return model["backend"]
+
+
+def format_hf_model_label(model: dict) -> str:
+    downloads = int(model.get("downloads") or 0)
+    return f"{model.get('modelId') or model.get('id')} ({downloads:,} downloads)"
 
 
 def get_openvino_device_options(model: dict, detected_devices: list[str]) -> tuple[list[str], dict[str, str]]:
@@ -329,6 +366,37 @@ with st.sidebar:
             help="Escolha o modelo base usado para responder suas perguntas.",
         )
         st.session_state.selected_family_id = selected_family_id
+
+        with st.expander("Buscar modelos OpenVINO no Hugging Face"):
+            hf_query = st.text_input(
+                "Pesquisar no Hugging Face",
+                placeholder="Ex.: qwen, llama, deepseek",
+                help=(
+                    "Mostra apenas repositorios retornados pela API do Hugging Face "
+                    "com filtro OpenVINO."
+                ),
+            )
+            hf_results = search_hugging_face_openvino_models(hf_query)
+
+            if len(hf_query.strip()) < 2:
+                st.caption("Digite pelo menos 2 caracteres para pesquisar.")
+            elif not hf_results:
+                st.caption("Nenhum modelo OpenVINO encontrado para esta busca.")
+            else:
+                selected_hf_model = st.selectbox(
+                    "Resultados OpenVINO",
+                    options=hf_results,
+                    format_func=format_hf_model_label,
+                    help="Resultados externos do Hugging Face; ainda nao fazem parte do catalogo local.",
+                )
+                selected_hf_model_id = selected_hf_model.get("modelId") or selected_hf_model.get("id")
+                st.caption(f"Repositorio: {selected_hf_model_id}")
+                st.caption(f"Pipeline: {selected_hf_model.get('pipeline_tag') or 'Nao informado'}")
+                st.markdown(f"[Abrir no Hugging Face](https://huggingface.co/{selected_hf_model_id})")
+                st.info(
+                    "Para executar este modelo neste app, ele ainda precisa ser adicionado "
+                    "ao catalogo do backend em `Model/ai_engine.py`."
+                )
 
         family_models = families[selected_family_id]
         has_openvino = any(model["provider"] == "openvino" for model in family_models)
