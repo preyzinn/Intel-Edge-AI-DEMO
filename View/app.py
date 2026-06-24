@@ -170,7 +170,7 @@ def group_models_by_family(models: list[dict]) -> dict[str, list[dict]]:
 
 def format_variant_label(model: dict) -> str:
     if model["provider"] == "openvino":
-        return "OpenVINO otimizado"
+        return "OpenVINO"
 
     if model["provider"] == "transformers":
         return "Transformers/PyTorch"
@@ -233,53 +233,30 @@ def render_metrics_chart(metrics: list[dict], family_name: str | None) -> None:
         st.caption("Latencia")
         st.bar_chart(latency_df)
 
-    cpu_columns = [
-        column
-        for column in ("backend_process_cpu_percent", "system_cpu_percent")
-        if column in latest.columns and latest[column].notna().any()
-    ]
-    if cpu_columns:
-        cpu_df = latest.pivot_table(
-            index="label",
-            values=cpu_columns,
-            aggfunc="last",
-        )
-        st.caption("CPU (%)")
-        st.bar_chart(cpu_df)
-
 @st.fragment(run_every="2s")
 def render_live_hardware_status(backend_online: bool) -> None:
-    st.subheader("Hardware em tempo real")
+    st.subheader("Hardware detectado")
 
     if not backend_online:
         st.caption("Backend offline.")
         return
 
     hardware = fetch_hardware()
-    cpu = hardware.get("cpu", {})
+    system_metrics = hardware.get("cpu", {})
     available_devices = hardware.get("openvino_available_devices", [])
-    system_cpu = cpu.get("system_cpu_percent")
-    memory_percent = cpu.get("memory_percent")
+    memory_percent = system_metrics.get("memory_percent")
 
-    cpu_col, memory_col = st.columns(2)
-    with cpu_col:
-        if system_cpu is None:
-            st.metric("CPU sistema", "N/D")
-        else:
-            st.metric("CPU sistema", f"{float(system_cpu):.1f}%")
-
-    with memory_col:
-        if memory_percent is None:
-            st.metric("Memoria", "N/D")
-        else:
-            st.metric("Memoria", f"{float(memory_percent):.1f}%")
+    if memory_percent is None:
+        st.metric("Memoria do sistema", "N/D")
+    else:
+        st.metric("Memoria do sistema", f"{float(memory_percent):.1f}%")
 
     if available_devices:
         st.caption("OpenVINO detectou: " + ", ".join(available_devices))
     else:
         st.caption("OpenVINO nao retornou dispositivos.")
 
-    st.caption("Atualiza a cada 2 segundos.")
+    st.caption("Atualiza automaticamente.")
 
 
 if "messages" not in st.session_state:
@@ -326,9 +303,11 @@ selected_model = None
 metrics_container = None
 
 with st.sidebar:
-    st.header("Configuracao")
+    st.header("Painel de controle")
 
-    st.caption("API URL")
+    st.subheader("Conexao")
+    st.caption(f"Backend: {status_label}")
+    st.caption("Endpoint de chat")
     st.code(API_URL)
 
     st.divider()
@@ -343,10 +322,11 @@ with st.sidebar:
         family_index = family_options.index(st.session_state.selected_family_id)
 
         selected_family_id = st.selectbox(
-            "Escolha a familia",
+            "Familia do modelo",
             options=family_options,
             index=family_index,
             format_func=lambda family_id: families[family_id][0]["family_name"],
+            help="Escolha o modelo base usado para responder suas perguntas.",
         )
         st.session_state.selected_family_id = selected_family_id
 
@@ -354,28 +334,13 @@ with st.sidebar:
         has_openvino = any(model["provider"] == "openvino" for model in family_models)
         has_transformers = any(model["provider"] == "transformers" for model in family_models)
         family_model_ids = [model["id"] for model in family_models]
-        if st.session_state.selected_model_id not in family_model_ids:
-            default_model = next(
-                (model for model in family_models if model["provider"] == "openvino"),
-                family_models[0],
-            )
-            st.session_state.selected_model_id = default_model["id"]
 
-        selected_model_id = st.selectbox(
-            "Variante de execucao",
-            options=family_model_ids,
-            index=family_model_ids.index(st.session_state.selected_model_id),
-            format_func=lambda model_id: format_variant_label(models_by_id[model_id]),
-            disabled=st.session_state.compare_variants,
-            help="Usada quando a comparacao esta desligada.",
-        )
-        st.session_state.selected_model_id = selected_model_id
-        selected_model = models_by_id[selected_model_id]
-
+        st.subheader("Modo de execucao")
         if has_openvino and has_transformers:
             st.session_state.compare_variants = st.toggle(
-                "Comparar base vs OpenVINO",
+                "Comparar runtime base com OpenVINO",
                 value=st.session_state.compare_variants,
+                help="Quando ativo, cada prompt roda nas duas variantes para comparar latencia e tokens/s.",
             )
         elif has_openvino:
             st.session_state.compare_variants = False
@@ -384,8 +349,26 @@ with st.sidebar:
             st.session_state.compare_variants = False
             st.info("Esta familia nao tem variante OpenVINO neste app.")
 
+        if st.session_state.selected_model_id not in family_model_ids:
+            default_model = next(
+                (model for model in family_models if model["provider"] == "openvino"),
+                family_models[0],
+            )
+            st.session_state.selected_model_id = default_model["id"]
+
+        selected_model_id = st.selectbox(
+            "Runtime individual",
+            options=family_model_ids,
+            index=family_model_ids.index(st.session_state.selected_model_id),
+            format_func=lambda model_id: format_variant_label(models_by_id[model_id]),
+            disabled=st.session_state.compare_variants,
+            help="Usado apenas quando a comparacao esta desligada.",
+        )
+        st.session_state.selected_model_id = selected_model_id
+        selected_model = models_by_id[selected_model_id]
+
         status = "Instalado" if selected_model["installed"] else "Nao instalado"
-        optimization = "com OpenVINO" if selected_model["optimized"] else "sem OpenVINO"
+        acceleration = "OpenVINO" if selected_model["optimized"] else "Nenhuma"
         selected_inference_device = selected_model.get("inference_device", "Nao informado")
 
         if selected_model["provider"] == "openvino" or (
@@ -406,10 +389,10 @@ with st.sidebar:
                 )
 
             st.session_state.selected_inference_device = st.selectbox(
-                "Onde executar OpenVINO",
+                "Dispositivo para OpenVINO",
                 options=device_options,
                 index=device_options.index(st.session_state.selected_inference_device),
-                help="Dispositivos detectados pelo OpenVINO neste PC.",
+                help="Define onde a variante OpenVINO sera executada.",
             )
             selected_inference_device = st.session_state.selected_inference_device
             unavailable_detected_devices = [
@@ -441,15 +424,25 @@ with st.sidebar:
             else ([selected_model] if not selected_model["installed"] else [])
         )
 
-        st.caption(f"Execucao: {selected_model['backend']} ({optimization})")
-        st.caption(f"Dispositivo configurado: {selected_inference_device}")
+        st.subheader("Configuracao ativa")
+        if st.session_state.compare_variants:
+            compared_runtimes = ", ".join(model["backend"] for model in comparison_models)
+            installed_count = sum(1 for model in comparison_models if model["installed"])
+            st.caption("Modo: comparacao")
+            st.caption(f"Runtimes executados: {compared_runtimes}")
+            st.caption(f"Instalacao: {installed_count}/{len(comparison_models)} variantes prontas")
+        else:
+            st.caption("Modo: runtime individual")
+            st.caption(f"Runtime selecionado: {format_variant_label(selected_model)}")
+            st.caption(f"Aceleracao: {acceleration}")
+            st.caption(f"Instalacao: {status}")
+        st.caption(f"Dispositivo: {selected_inference_device}")
         if openvino_devices:
-            st.caption("OpenVINO detectou: " + ", ".join(openvino_devices))
-        st.caption(f"Status: {status}")
+            st.caption("Dispositivos OpenVINO: " + ", ".join(openvino_devices))
         st.write(selected_model["description"])
 
         if st.session_state.compare_variants:
-            st.caption("Comparacao ativa: o app vai executar base e OpenVINO.")
+            st.info("Comparacao ativa: cada mensagem executa nas variantes base e OpenVINO.")
 
         if st.session_state.compare_variants:
             missing_labels = [model["backend"] for model in install_targets]
@@ -473,10 +466,12 @@ with st.sidebar:
 
     st.divider()
 
+    st.subheader("Performance")
     metrics_container = st.container()
 
     st.divider()
 
+    st.subheader("Acoes")
     if st.button("Limpar conversa", use_container_width=True):
         st.session_state.messages = []
         st.rerun()
@@ -574,7 +569,7 @@ if prompt:
                             variant.get("inference_device", "Nao informado"),
                         )
                         hardware_metrics = data.get("hardware_metrics", {})
-                        cpu_metrics = hardware_metrics.get("cpu", {})
+                        system_metrics = hardware_metrics.get("cpu", {})
                         openvino_devices = hardware_metrics.get("openvino_available_devices", [])
                         label = (
                             f"{backend} ({inference_device})"
@@ -609,11 +604,7 @@ if prompt:
                                 "generated_tokens": generated_tokens,
                                 "tokens_per_second": tokens_per_second,
                                 "inference_device": inference_device,
-                                "system_cpu_percent": cpu_metrics.get("system_cpu_percent"),
-                                "backend_process_cpu_percent": cpu_metrics.get(
-                                    "backend_process_cpu_percent"
-                                ),
-                                "memory_percent": cpu_metrics.get("memory_percent"),
+                                "memory_percent": system_metrics.get("memory_percent"),
                                 "openvino_available_devices": openvino_devices,
                             }
                         )
