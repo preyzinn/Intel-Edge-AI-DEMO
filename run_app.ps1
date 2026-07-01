@@ -210,11 +210,26 @@ function Show-OptionalToolStatus {
     }
 }
 
+function Get-LocalIPv4Addresses {
+    try {
+        return Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+            Where-Object {
+                $_.IPAddress -notlike "127.*" -and
+                $_.IPAddress -notlike "169.254.*" -and
+                $_.PrefixOrigin -ne "WellKnown"
+            } |
+            Select-Object -ExpandProperty IPAddress -Unique
+    }
+    catch {
+        return @()
+    }
+}
+
 function Get-PortOwnerProcess {
     param([int]$Port)
 
     try {
-        $connection = Get-NetTCPConnection -LocalAddress 127.0.0.1 -LocalPort $Port -State Listen -ErrorAction SilentlyContinue |
+        $connection = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue |
             Select-Object -First 1
         if ($null -eq $connection) {
             return $null
@@ -413,13 +428,13 @@ try {
     }
 
     if ((Test-PortInUse -Port $StreamlitPort) -and -not (Stop-KnownServiceOnPort -Port $StreamlitPort -ServiceName "Streamlit" -RequiredPatterns @("streamlit", "View/app.py"))) {
-        Write-LauncherLine "Streamlit ja esta rodando em http://localhost:$StreamlitPort"
+        Write-LauncherLine "Streamlit ja esta rodando em http://127.0.0.1:$StreamlitPort"
         Write-LauncherLine "Aviso: processo existente nessa porta nao sera parado por este launcher."
     }
     else {
         $StreamlitProcess = Start-PythonService `
             -Name "streamlit" `
-            -Arguments @("-m", "streamlit", "run", "View/app.py", "--server.address", "localhost", "--server.port", "$StreamlitPort") `
+            -Arguments @("-m", "streamlit", "run", "View/app.py", "--server.address", "0.0.0.0", "--server.port", "$StreamlitPort") `
             -OutLog (Join-Path $LogDir "streamlit-$StreamlitPort.out.log") `
             -ErrLog (Join-Path $LogDir "streamlit-$StreamlitPort.err.log")
         $StreamlitManaged = $true
@@ -429,7 +444,19 @@ try {
 
     Write-LauncherLine ""
     Write-LauncherLine "Link do Streamlit:"
-    Write-LauncherLine "http://localhost:$StreamlitPort"
+    Write-LauncherLine "Local: http://127.0.0.1:$StreamlitPort"
+    $networkAddresses = Get-LocalIPv4Addresses
+    if ($networkAddresses.Count -gt 0) {
+        Write-LauncherLine "Na rede:"
+        foreach ($address in $networkAddresses) {
+            Write-LauncherLine "http://$address`:$StreamlitPort"
+        }
+    }
+    else {
+        Write-LauncherLine "Na rede: use o IP desta maquina, por exemplo http://IP_DA_MAQUINA:$StreamlitPort"
+    }
+    Write-LauncherLine ""
+    Write-LauncherLine "Se outra maquina ainda nao abrir, libere a porta $StreamlitPort no Firewall do Windows."
     Write-LauncherLine ""
     Write-LauncherLine "Logs tambem salvos em:"
     Write-LauncherLine "- $LogDir\uvicorn-$ApiPort.out.log"
