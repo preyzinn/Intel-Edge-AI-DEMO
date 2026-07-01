@@ -360,25 +360,32 @@ selected_model = None
 metrics_container = None
 
 with st.sidebar:
-    st.header("Painel de controle")
+    st.header("Controle")
 
-    st.subheader("Conexao")
-    st.caption(f"Backend: {status_label}")
-    st.caption("Endpoint de chat")
-    st.code(API_URL)
-    if st.button("Atualizar hardware", use_container_width=True, disabled=not backend_online):
-        st.session_state.hardware = fetch_hardware()
-        st.rerun()
+    st.subheader("1. Status")
+    if backend_online:
+        st.success("Backend online")
+    else:
+        st.error("Backend offline")
+
+    with st.expander("Detalhes da conexao"):
+        st.caption("API usada pela interface")
+        st.code(API_URL)
+        if st.button("Atualizar hardware", use_container_width=True, disabled=not backend_online):
+            st.session_state.hardware = fetch_hardware()
+            st.rerun()
 
     st.divider()
-    st.subheader("Dependencias")
+    st.subheader("2. Setup")
     dependency_results = dependency_status()
     missing_dependencies = [
         package for package, installed in dependency_results.items() if not installed
     ]
 
     if missing_dependencies:
-        st.warning("Dependencias opcionais ausentes: " + ", ".join(missing_dependencies))
+        st.warning("IA local ainda nao configurada.")
+        with st.expander("Bibliotecas faltando"):
+            st.write(", ".join(missing_dependencies))
         if st.button("Instalar dependencias de IA", use_container_width=True):
             ok, message = install_ai_dependencies_with_progress()
             if ok:
@@ -388,12 +395,12 @@ with st.sidebar:
             else:
                 st.error(message)
     else:
-        st.success("Dependencias de IA instaladas.")
+        st.success("Dependencias de IA prontas.")
 
-    st.caption("O app inicia sem essas bibliotecas; instale aqui apenas quando for baixar ou executar modelos locais.")
+    st.caption("Instale dependencias de IA somente se for baixar ou executar modelos locais.")
 
     st.divider()
-    st.subheader("Modelo")
+    st.subheader("3. Modelo")
 
     if not backend_online:
         st.warning("Backend offline. Inicie o FastAPI para carregar os modelos.")
@@ -417,19 +424,21 @@ with st.sidebar:
         has_transformers = any(model["provider"] == "transformers" for model in family_models)
         family_model_ids = [model["id"] for model in family_models]
 
-        st.subheader("Modo de execucao")
+        st.divider()
+        st.subheader("4. Execucao")
+
         if has_openvino and has_transformers:
             st.session_state.compare_variants = st.toggle(
-                "Comparar runtime base com OpenVINO",
+                "Comparar base vs OpenVINO",
                 value=st.session_state.compare_variants,
-                help="Quando ativo, cada prompt roda nas duas variantes para comparar latencia e tokens/s.",
+                help="Executa cada prompt nas duas variantes para comparar desempenho.",
             )
         elif has_openvino:
             st.session_state.compare_variants = False
-            st.info("Esta familia so tem variante OpenVINO neste app.")
+            st.caption("Esta familia so tem variante OpenVINO.")
         else:
             st.session_state.compare_variants = False
-            st.info("Esta familia nao tem variante OpenVINO neste app.")
+            st.caption("Esta familia nao tem variante OpenVINO.")
 
         if st.session_state.selected_model_id not in family_model_ids:
             default_model = next(
@@ -439,12 +448,12 @@ with st.sidebar:
             st.session_state.selected_model_id = default_model["id"]
 
         selected_model_id = st.selectbox(
-            "Runtime individual",
+            "Runtime",
             options=family_model_ids,
             index=family_model_ids.index(st.session_state.selected_model_id),
             format_func=lambda model_id: format_variant_label(models_by_id[model_id]),
             disabled=st.session_state.compare_variants,
-            help="Usado apenas quando a comparacao esta desligada.",
+            help="Runtime usado quando a comparacao esta desligada.",
         )
         st.session_state.selected_model_id = selected_model_id
         selected_model = models_by_id[selected_model_id]
@@ -452,6 +461,8 @@ with st.sidebar:
         status = "Instalado" if selected_model["installed"] else "Nao instalado"
         acceleration = "OpenVINO" if selected_model["optimized"] else "Nenhuma"
         selected_inference_device = selected_model.get("inference_device", "Nao informado")
+
+        st.caption(selected_model["description"])
 
         if selected_model["provider"] == "openvino" or (
             st.session_state.compare_variants and has_openvino
@@ -492,7 +503,7 @@ with st.sidebar:
                 st.caption("Hardware nao carregado; usando CPU por padrao.")
         elif selected_model["provider"] == "transformers":
             selected_inference_device = "CPU"
-            st.caption("Transformers/PyTorch neste app esta configurado para CPU.")
+            st.caption("Transformers/PyTorch usa CPU neste app.")
         elif selected_model["provider"] == "ollama":
             selected_inference_device = "Ollama runtime"
             st.caption("O device do Ollama e controlado pelo proprio Ollama.")
@@ -507,31 +518,6 @@ with st.sidebar:
             if st.session_state.compare_variants
             else ([selected_model] if not selected_model["installed"] else [])
         )
-
-        st.subheader("Configuracao ativa")
-        if st.session_state.compare_variants:
-            compared_runtimes = ", ".join(model["backend"] for model in comparison_models)
-            installed_count = sum(1 for model in comparison_models if model["installed"])
-            st.caption("Modo: comparacao")
-            st.caption(f"Runtimes executados: {compared_runtimes}")
-            st.caption(f"Instalacao: {installed_count}/{len(comparison_models)} variantes prontas")
-        else:
-            st.caption("Modo: runtime individual")
-            st.caption(f"Runtime selecionado: {format_variant_label(selected_model)}")
-            st.caption(f"Aceleracao: {acceleration}")
-            st.caption(f"Instalacao: {status}")
-        st.caption(f"Dispositivo: {selected_inference_device}")
-        if openvino_devices:
-            st.caption("Dispositivos OpenVINO: " + ", ".join(openvino_devices))
-        st.write(selected_model["description"])
-
-        if st.session_state.compare_variants:
-            st.info("Comparacao ativa: cada mensagem executa nas variantes base e OpenVINO.")
-
-        if st.session_state.compare_variants:
-            missing_labels = [model["backend"] for model in install_targets]
-            if missing_labels:
-                st.warning("Faltam variantes para comparar: " + ", ".join(missing_labels))
 
         if install_targets:
             button_label = (
@@ -561,6 +547,31 @@ with st.sidebar:
                     st.rerun()
                 else:
                     st.error(message)
+
+        st.divider()
+        st.subheader("5. Resumo")
+        if st.session_state.compare_variants:
+            compared_runtimes = ", ".join(model["backend"] for model in comparison_models)
+            installed_count = sum(1 for model in comparison_models if model["installed"])
+            st.caption("Modo: comparacao base vs OpenVINO")
+            st.caption(f"Runtimes: {compared_runtimes}")
+            st.caption(f"Instalacao: {installed_count}/{len(comparison_models)} variantes prontas")
+        else:
+            st.caption("Modo: runtime unico")
+            st.caption(f"Runtime: {format_variant_label(selected_model)}")
+            st.caption(f"Aceleracao: {acceleration}")
+            st.caption(f"Instalacao: {status}")
+        st.caption(f"Dispositivo: {selected_inference_device}")
+        if openvino_devices:
+            st.caption("Dispositivos OpenVINO: " + ", ".join(openvino_devices))
+
+        if st.session_state.compare_variants:
+            st.info("Cada mensagem executara nas variantes base e OpenVINO.")
+
+        if st.session_state.compare_variants:
+            missing_labels = [model["backend"] for model in install_targets]
+            if missing_labels:
+                st.warning("Faltam variantes para comparar: " + ", ".join(missing_labels))
 
     st.divider()
 
