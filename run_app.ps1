@@ -36,6 +36,39 @@ function Test-PortInUse {
     }
 }
 
+function Test-HttpEndpoint {
+    param(
+        [string]$Url,
+        [int]$TimeoutSeconds = 2
+    )
+
+    try {
+        $response = Invoke-WebRequest -Uri $Url -UseBasicParsing -TimeoutSec $TimeoutSeconds
+        return $response.StatusCode -ge 200 -and $response.StatusCode -lt 500
+    }
+    catch {
+        return $false
+    }
+}
+
+function Wait-HttpEndpoint {
+    param(
+        [string]$Url,
+        [int]$TimeoutSeconds = 30
+    )
+
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    while ((Get-Date) -lt $deadline) {
+        if (Test-HttpEndpoint -Url $Url) {
+            return $true
+        }
+
+        Start-Sleep -Seconds 1
+    }
+
+    return $false
+}
+
 function Test-CommandAvailable {
     param([string]$Command)
 
@@ -207,21 +240,6 @@ function Show-OptionalToolStatus {
     }
     else {
         Write-LauncherLine "Aviso: Ollama nao encontrado. Apenas o runtime Ollama ficara indisponivel; OpenVINO/Transformers continuam funcionando."
-    }
-}
-
-function Get-LocalIPv4Addresses {
-    try {
-        return Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
-            Where-Object {
-                $_.IPAddress -notlike "127.*" -and
-                $_.IPAddress -notlike "169.254.*" -and
-                $_.PrefixOrigin -ne "WellKnown"
-            } |
-            Select-Object -ExpandProperty IPAddress -Unique
-    }
-    catch {
-        return @()
     }
 }
 
@@ -427,36 +445,47 @@ try {
         $ApiManaged = $true
     }
 
-    if ((Test-PortInUse -Port $StreamlitPort) -and -not (Stop-KnownServiceOnPort -Port $StreamlitPort -ServiceName "Streamlit" -RequiredPatterns @("streamlit", "View/app.py"))) {
-        Write-LauncherLine "Streamlit ja esta rodando em http://127.0.0.1:$StreamlitPort"
-        Write-LauncherLine "Aviso: processo existente nessa porta nao sera parado por este launcher."
+    if (Test-PortInUse -Port $StreamlitPort) {
+        if (Stop-KnownServiceOnPort -Port $StreamlitPort -ServiceName "Streamlit" -RequiredPatterns @("streamlit", "View/app.py")) {
+            $StreamlitProcess = Start-PythonService `
+                -Name "streamlit" `
+                -Arguments @("-m", "streamlit", "run", "View/app.py", "--server.address", "127.0.0.1", "--server.port", "$StreamlitPort") `
+                -OutLog (Join-Path $LogDir "streamlit-$StreamlitPort.out.log") `
+                -ErrLog (Join-Path $LogDir "streamlit-$StreamlitPort.err.log")
+            $StreamlitManaged = $true
+        }
+        else {
+            throw "A porta $StreamlitPort esta ocupada por outro processo. Feche esse processo ou rode: .\run_app.ps1 -StreamlitPort 8502"
+        }
     }
     else {
         $StreamlitProcess = Start-PythonService `
             -Name "streamlit" `
-            -Arguments @("-m", "streamlit", "run", "View/app.py", "--server.address", "0.0.0.0", "--server.port", "$StreamlitPort") `
+            -Arguments @("-m", "streamlit", "run", "View/app.py", "--server.address", "127.0.0.1", "--server.port", "$StreamlitPort") `
             -OutLog (Join-Path $LogDir "streamlit-$StreamlitPort.out.log") `
             -ErrLog (Join-Path $LogDir "streamlit-$StreamlitPort.err.log")
         $StreamlitManaged = $true
     }
 
-    Start-Sleep -Seconds 3
+    $StreamlitUrl = "http://127.0.0.1:$StreamlitPort"
+    if (-not (Wait-HttpEndpoint -Url $StreamlitUrl -TimeoutSeconds 30)) {
+        Write-LauncherLine ""
+        Write-LauncherLine "Streamlit nao respondeu em $StreamlitUrl."
+        Write-LauncherLine "Veja os ultimos logs:"
+        $streamlitErrLog = Join-Path $LogDir "streamlit-$StreamlitPort.err.log"
+        $streamlitOutLog = Join-Path $LogDir "streamlit-$StreamlitPort.out.log"
+        if (Test-Path $streamlitErrLog) {
+            Get-Content $streamlitErrLog -Tail 30 | ForEach-Object { Write-LauncherLine "[streamlit err] $_" }
+        }
+        if (Test-Path $streamlitOutLog) {
+            Get-Content $streamlitOutLog -Tail 30 | ForEach-Object { Write-LauncherLine "[streamlit out] $_" }
+        }
+        throw "Streamlit nao iniciou corretamente na porta $StreamlitPort."
+    }
 
     Write-LauncherLine ""
     Write-LauncherLine "Link do Streamlit:"
-    Write-LauncherLine "Local: http://127.0.0.1:$StreamlitPort"
-    $networkAddresses = Get-LocalIPv4Addresses
-    if ($networkAddresses.Count -gt 0) {
-        Write-LauncherLine "Na rede:"
-        foreach ($address in $networkAddresses) {
-            Write-LauncherLine "http://$address`:$StreamlitPort"
-        }
-    }
-    else {
-        Write-LauncherLine "Na rede: use o IP desta maquina, por exemplo http://IP_DA_MAQUINA:$StreamlitPort"
-    }
-    Write-LauncherLine ""
-    Write-LauncherLine "Se outra maquina ainda nao abrir, libere a porta $StreamlitPort no Firewall do Windows."
+    Write-LauncherLine $StreamlitUrl
     Write-LauncherLine ""
     Write-LauncherLine "Logs tambem salvos em:"
     Write-LauncherLine "- $LogDir\uvicorn-$ApiPort.out.log"

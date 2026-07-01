@@ -19,7 +19,7 @@ if __name__ == "__main__" and get_script_run_ctx(suppress_warning=True) is None:
             "run",
             str(Path(__file__).resolve()),
             "--server.address",
-            "0.0.0.0",
+            "127.0.0.1",
             "--server.port",
             "8501",
         ],
