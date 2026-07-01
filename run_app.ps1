@@ -449,7 +449,7 @@ try {
         if (Stop-KnownServiceOnPort -Port $StreamlitPort -ServiceName "Streamlit" -RequiredPatterns @("streamlit", "View/app.py")) {
             $StreamlitProcess = Start-PythonService `
                 -Name "streamlit" `
-                -Arguments @("-m", "streamlit", "run", "View/app.py", "--server.address", "127.0.0.1", "--server.port", "$StreamlitPort") `
+                -Arguments @("-m", "streamlit", "run", "View/app.py", "--server.address", "127.0.0.1", "--server.port", "$StreamlitPort", "--server.headless", "true") `
                 -OutLog (Join-Path $LogDir "streamlit-$StreamlitPort.out.log") `
                 -ErrLog (Join-Path $LogDir "streamlit-$StreamlitPort.err.log")
             $StreamlitManaged = $true
@@ -461,7 +461,7 @@ try {
     else {
         $StreamlitProcess = Start-PythonService `
             -Name "streamlit" `
-            -Arguments @("-m", "streamlit", "run", "View/app.py", "--server.address", "127.0.0.1", "--server.port", "$StreamlitPort") `
+            -Arguments @("-m", "streamlit", "run", "View/app.py", "--server.address", "127.0.0.1", "--server.port", "$StreamlitPort", "--server.headless", "true") `
             -OutLog (Join-Path $LogDir "streamlit-$StreamlitPort.out.log") `
             -ErrLog (Join-Path $LogDir "streamlit-$StreamlitPort.err.log")
         $StreamlitManaged = $true

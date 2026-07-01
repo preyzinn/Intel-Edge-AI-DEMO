@@ -7,25 +7,6 @@ from pathlib import Path
 
 import requests
 import streamlit as st
-from streamlit.runtime.scriptrunner import get_script_run_ctx
-
-
-if __name__ == "__main__" and get_script_run_ctx(suppress_warning=True) is None:
-    subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "streamlit",
-            "run",
-            str(Path(__file__).resolve()),
-            "--server.address",
-            "127.0.0.1",
-            "--server.port",
-            "8501",
-        ],
-        check=False,
-    )
-    sys.exit()
 
 
 st.set_page_config(
