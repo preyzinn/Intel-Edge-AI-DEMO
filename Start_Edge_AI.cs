@@ -14,7 +14,10 @@ class Program
 
         Console.Title = "Intel Edge AI Demo";
         Console.WriteLine("Iniciando Intel Edge AI Demo...");
+        Console.WriteLine("Launcher: " + System.Reflection.Assembly.GetExecutingAssembly().Location);
+        Console.WriteLine("Script: " + script);
         Console.WriteLine("Deixe esta janela aberta para ver logs, downloads e erros.");
+        Console.WriteLine("Quando iniciar corretamente, abra: http://127.0.0.1:8501");
         Console.WriteLine("Pressione Ctrl+C para parar FastAPI, Streamlit e processos filhos.");
         Console.WriteLine();
 
@@ -81,7 +84,9 @@ class Program
         if (powershellProcess.ExitCode != 0)
         {
             Console.WriteLine("Ocorreu um erro ao iniciar ou manter a aplicacao. Codigo: " + powershellProcess.ExitCode);
-            Console.WriteLine("Verifique os logs na pasta .logs.");
+            Console.WriteLine("Verifique estes logs:");
+            Console.WriteLine(Path.Combine(root, ".logs", "streamlit-8501.err.log"));
+            Console.WriteLine(Path.Combine(root, ".logs", "streamlit-8501.out.log"));
         }
         else
         {
