@@ -1,10 +1,10 @@
 import subprocess
 import sys
 import time
+from importlib import metadata
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-import pandas as pd
 import requests
 import streamlit as st
 from streamlit.runtime.scriptrunner import get_script_run_ctx
@@ -37,20 +37,33 @@ API_BASE_URL = "http://127.0.0.1:8000"
 API_URL = f"{API_BASE_URL}/chat"
 MODELS_URL = f"{API_BASE_URL}/models"
 HARDWARE_URL = f"{API_BASE_URL}/hardware"
-HF_MODEL_SEARCH_URL = "https://huggingface.co/api/models"
+ROOT_DIR = Path(__file__).resolve().parents[1]
+AI_REQUIREMENTS_FILE = ROOT_DIR / "requirements-ai.txt"
+AI_DEPENDENCY_MODULES = {
+    "transformers": "transformers",
+    "torch": "torch",
+    "openvino": "openvino",
+    "optimum-intel": "optimum-intel",
+    "huggingface-hub": "huggingface-hub",
+    "safetensors": "safetensors",
+    "accelerate": "accelerate",
+    "psutil": "psutil",
+}
 
 
+@st.cache_data(ttl=5, show_spinner=False)
 def is_backend_online() -> bool:
     try:
-        response = requests.get(API_BASE_URL, timeout=2)
+        response = requests.get(API_BASE_URL, timeout=1)
         return response.ok
     except requests.exceptions.RequestException:
         return False
 
 
+@st.cache_data(ttl=15, show_spinner=False)
 def fetch_models() -> list[dict]:
     try:
-        response = requests.get(MODELS_URL, timeout=10)
+        response = requests.get(MODELS_URL, timeout=3)
         response.raise_for_status()
         return response.json().get("models", [])
     except requests.exceptions.RequestException:
@@ -59,42 +72,83 @@ def fetch_models() -> list[dict]:
 
 def fetch_hardware() -> dict:
     try:
-        response = requests.get(HARDWARE_URL, timeout=5)
+        response = requests.get(HARDWARE_URL, timeout=2)
         response.raise_for_status()
         return response.json()
     except requests.exceptions.RequestException:
         return {}
 
 
-@st.cache_data(ttl=300, show_spinner=False)
-def search_hugging_face_openvino_models(query: str, limit: int = 12) -> list[dict]:
-    if len(query.strip()) < 2:
-        return []
-
-    try:
-        response = requests.get(
-            HF_MODEL_SEARCH_URL,
-            params={
-                "search": query.strip(),
-                "filter": "openvino",
-                "sort": "downloads",
-                "direction": -1,
-                "limit": limit,
-            },
-            timeout=10,
-        )
-        response.raise_for_status()
-    except requests.exceptions.RequestException:
-        return []
-
-    results = []
-    for model in response.json():
-        tags = model.get("tags") or []
-        library_name = model.get("library_name")
-        if library_name == "openvino" or "openvino" in tags:
-            results.append(model)
+@st.cache_data(ttl=30, show_spinner=False)
+def dependency_status() -> dict[str, bool]:
+    results = {}
+    for package, distribution_name in AI_DEPENDENCY_MODULES.items():
+        try:
+            metadata.version(distribution_name)
+            results[package] = True
+        except metadata.PackageNotFoundError:
+            results[package] = False
 
     return results
+
+
+def install_ai_dependencies() -> tuple[bool, str]:
+    if not AI_REQUIREMENTS_FILE.exists():
+        return False, f"Arquivo nao encontrado: {AI_REQUIREMENTS_FILE}"
+
+    command = [
+        sys.executable,
+        "-m",
+        "pip",
+        "install",
+        "-r",
+        str(AI_REQUIREMENTS_FILE),
+    ]
+    try:
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=3600,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return False, "Instalacao demorou mais de 60 minutos e foi interrompida."
+    except OSError as exc:
+        return False, str(exc)
+
+    if result.returncode == 0:
+        return True, "Dependencias de IA instaladas. Reinicie o backend se ele ja estava aberto."
+
+    details = result.stderr.strip() or result.stdout.strip()
+    return False, details or "pip install falhou sem mensagem detalhada."
+
+
+def install_ai_dependencies_with_progress() -> tuple[bool, str]:
+    progress = st.progress(0, text="Preparando instalacao das dependencias...")
+    status = st.empty()
+    progress_value = 0
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(install_ai_dependencies)
+
+        while not future.done():
+            if progress_value < 95:
+                progress_value += 1
+            progress.progress(progress_value, text="Instalando bibliotecas opcionais de IA...")
+            status.caption("Baixando e instalando Transformers, OpenVINO e dependencias relacionadas.")
+            time.sleep(2)
+
+        ok, message = future.result()
+
+    if ok:
+        progress.progress(100, text="Dependencias instaladas.")
+        status.caption("Dependencias instaladas.")
+    else:
+        progress.progress(progress_value, text="Instalacao falhou.")
+        status.caption("Instalacao falhou.")
+
+    return ok, message
 
 
 def install_model(model_id: str) -> tuple[bool, str]:
@@ -210,11 +264,6 @@ def format_variant_label(model: dict) -> str:
     return model["backend"]
 
 
-def format_hf_model_label(model: dict) -> str:
-    downloads = int(model.get("downloads") or 0)
-    return f"{model.get('modelId') or model.get('id')} ({downloads:,} downloads)"
-
-
 def get_openvino_device_options(model: dict, detected_devices: list[str]) -> tuple[list[str], dict[str, str]]:
     supported_devices = model.get("supported_openvino_devices") or detected_devices or ["CPU"]
     unsupported_devices = model.get("unsupported_openvino_devices", {})
@@ -236,49 +285,36 @@ def render_metrics_chart(metrics: list[dict], family_name: str | None) -> None:
         st.caption("Execute um prompt para gerar metricas.")
         return
 
-    df = pd.DataFrame(metrics)
     if family_name:
-        df = df[df["family"] == family_name]
+        metrics = [metric for metric in metrics if metric["family"] == family_name]
 
-    if df.empty:
+    if not metrics:
         st.caption("Ainda nao ha metricas para esta familia.")
         return
 
-    latest = df.sort_values("prompt_id").groupby("label", as_index=False).tail(1)
+    latest_by_label = {}
+    for metric in sorted(metrics, key=lambda item: item["prompt_id"]):
+        latest_by_label[metric["label"]] = metric
 
-    st.caption("Atualiza a cada prompt da familia selecionada.")
+    st.caption("Ultima execucao da familia selecionada.")
+    for label, metric in latest_by_label.items():
+        st.caption(
+            f"{label}: {metric['tokens_per_second']:.2f} tokens/s | "
+            f"{metric['latency']:.2f}s | {metric['generated_tokens']} tokens"
+        )
 
-    latency_df = latest.pivot_table(
-        index="label",
-        values="latency",
-        aggfunc="last",
-    )
 
-    tokens_df = latest.pivot_table(
-        index="label",
-        values="tokens_per_second",
-        aggfunc="last",
-    )
-
-    tokens_col, latency_col = st.columns(2)
-
-    with tokens_col:
-        st.caption("Tokens/s")
-        st.bar_chart(tokens_df)
-
-    with latency_col:
-        st.caption("Latencia")
-        st.bar_chart(latency_df)
-
-@st.fragment(run_every="2s")
-def render_live_hardware_status(backend_online: bool) -> None:
+def render_hardware_status(backend_online: bool, hardware: dict) -> None:
     st.subheader("Hardware detectado")
 
     if not backend_online:
         st.caption("Backend offline.")
         return
 
-    hardware = fetch_hardware()
+    if not hardware:
+        st.caption("Nao carregado. Use 'Atualizar hardware' na sidebar.")
+        return
+
     system_metrics = hardware.get("cpu", {})
     available_devices = hardware.get("openvino_available_devices", [])
     memory_percent = system_metrics.get("memory_percent")
@@ -293,7 +329,7 @@ def render_live_hardware_status(backend_online: bool) -> None:
     else:
         st.caption("OpenVINO nao retornou dispositivos.")
 
-    st.caption("Atualiza automaticamente.")
+    st.caption("Atualizacao manual para evitar travamentos.")
 
 
 if "messages" not in st.session_state:
@@ -317,6 +353,9 @@ if "selected_model_id" not in st.session_state:
 if "selected_inference_device" not in st.session_state:
     st.session_state.selected_inference_device = "CPU"
 
+if "hardware" not in st.session_state:
+    st.session_state.hardware = {}
+
 
 st.title("Intel Edge AI Assistant")
 
@@ -328,7 +367,7 @@ st.caption(f"Status: {status_icon} - {status_label}")
 st.divider()
 
 models = fetch_models() if backend_online else []
-hardware = fetch_hardware() if backend_online else {}
+hardware = st.session_state.hardware if backend_online else {}
 openvino_devices = hardware.get("openvino_available_devices", [])
 models_by_id = {model["id"]: model for model in models}
 families = group_models_by_family(models)
@@ -346,6 +385,31 @@ with st.sidebar:
     st.caption(f"Backend: {status_label}")
     st.caption("Endpoint de chat")
     st.code(API_URL)
+    if st.button("Atualizar hardware", use_container_width=True, disabled=not backend_online):
+        st.session_state.hardware = fetch_hardware()
+        st.rerun()
+
+    st.divider()
+    st.subheader("Dependencias")
+    dependency_results = dependency_status()
+    missing_dependencies = [
+        package for package, installed in dependency_results.items() if not installed
+    ]
+
+    if missing_dependencies:
+        st.warning("Dependencias opcionais ausentes: " + ", ".join(missing_dependencies))
+        if st.button("Instalar dependencias de IA", use_container_width=True):
+            ok, message = install_ai_dependencies_with_progress()
+            if ok:
+                dependency_status.clear()
+                st.success(message)
+                st.rerun()
+            else:
+                st.error(message)
+    else:
+        st.success("Dependencias de IA instaladas.")
+
+    st.caption("O app inicia sem essas bibliotecas; instale aqui apenas quando for baixar ou executar modelos locais.")
 
     st.divider()
     st.subheader("Modelo")
@@ -366,37 +430,6 @@ with st.sidebar:
             help="Escolha o modelo base usado para responder suas perguntas.",
         )
         st.session_state.selected_family_id = selected_family_id
-
-        with st.expander("Buscar modelos OpenVINO no Hugging Face"):
-            hf_query = st.text_input(
-                "Pesquisar no Hugging Face",
-                placeholder="Ex.: qwen, llama, deepseek",
-                help=(
-                    "Mostra apenas repositorios retornados pela API do Hugging Face "
-                    "com filtro OpenVINO."
-                ),
-            )
-            hf_results = search_hugging_face_openvino_models(hf_query)
-
-            if len(hf_query.strip()) < 2:
-                st.caption("Digite pelo menos 2 caracteres para pesquisar.")
-            elif not hf_results:
-                st.caption("Nenhum modelo OpenVINO encontrado para esta busca.")
-            else:
-                selected_hf_model = st.selectbox(
-                    "Resultados OpenVINO",
-                    options=hf_results,
-                    format_func=format_hf_model_label,
-                    help="Resultados externos do Hugging Face; ainda nao fazem parte do catalogo local.",
-                )
-                selected_hf_model_id = selected_hf_model.get("modelId") or selected_hf_model.get("id")
-                st.caption(f"Repositorio: {selected_hf_model_id}")
-                st.caption(f"Pipeline: {selected_hf_model.get('pipeline_tag') or 'Nao informado'}")
-                st.markdown(f"[Abrir no Hugging Face](https://huggingface.co/{selected_hf_model_id})")
-                st.info(
-                    "Para executar este modelo neste app, ele ainda precisa ser adicionado "
-                    "ao catalogo do backend em `Model/ai_engine.py`."
-                )
 
         family_models = families[selected_family_id]
         has_openvino = any(model["provider"] == "openvino" for model in family_models)
@@ -474,6 +507,8 @@ with st.sidebar:
                         f"{device} detectado, mas indisponivel para esta variante: "
                         f"{unsupported_devices[device]}"
                     )
+            if not openvino_devices:
+                st.caption("Hardware nao carregado; usando CPU por padrao.")
         elif selected_model["provider"] == "transformers":
             selected_inference_device = "CPU"
             st.caption("Transformers/PyTorch neste app esta configurado para CPU.")
@@ -519,14 +554,28 @@ with st.sidebar:
 
         if install_targets:
             button_label = (
-                "Instalar variantes faltantes"
+                "Baixar modelos faltantes"
                 if st.session_state.compare_variants
-                else "Instalar variante selecionada"
+                else "Baixar modelo selecionado"
             )
-            if st.button(button_label, use_container_width=True):
+            model_download_needs_ai_dependencies = any(
+                model["provider"] in {"transformers", "openvino"}
+                for model in install_targets
+            )
+            block_model_download = (
+                model_download_needs_ai_dependencies and bool(missing_dependencies)
+            )
+            if block_model_download:
+                st.info("Instale as dependencias de IA antes de baixar modelos locais.")
+            if st.button(
+                button_label,
+                use_container_width=True,
+                disabled=block_model_download,
+            ):
                 ok, message = install_missing_models_with_progress(install_targets)
 
                 if ok:
+                    fetch_models.clear()
                     st.success(message)
                     st.rerun()
                 else:
@@ -712,4 +761,4 @@ if metrics_container is not None:
     with metrics_container:
         render_metrics_chart(st.session_state.metrics, active_family_name)
         st.divider()
-        render_live_hardware_status(backend_online)
+        render_hardware_status(backend_online, hardware)

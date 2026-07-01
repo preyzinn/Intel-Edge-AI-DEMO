@@ -462,7 +462,7 @@ def _modelo_ollama_instalado(model_name: str) -> bool:
             ["ollama", "list"],
             capture_output=True,
             text=True,
-            timeout=10,
+            timeout=2,
             check=False,
         )
     except (FileNotFoundError, subprocess.SubprocessError):

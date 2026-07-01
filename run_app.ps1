@@ -159,17 +159,8 @@ function Ensure-PythonDependencies {
         "fastapi",
         "uvicorn",
         "streamlit",
-        "pandas",
         "requests",
-        "pydantic",
-        "psutil",
-        "transformers",
-        "torch",
-        "openvino",
-        "optimum",
-        "huggingface_hub",
-        "safetensors",
-        "accelerate"
+        "pydantic"
     )
 
     Repair-StalePipMetadata

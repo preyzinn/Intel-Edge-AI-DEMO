@@ -1,14 +1,5 @@
 fastapi
 uvicorn[standard]
 streamlit
-pandas
 requests
 pydantic
-psutil
-transformers
-torch
-openvino
-optimum-intel
-huggingface-hub
-safetensors
-accelerate
