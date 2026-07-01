@@ -245,6 +245,39 @@ def format_variant_label(model: dict) -> str:
     return model["backend"]
 
 
+def format_model_status(model: dict) -> str:
+    status = "instalado" if model["installed"] else "nao instalado"
+    return f"{format_variant_label(model)}: {status}"
+
+
+def default_model_id_for_family(family_models: list[dict]) -> str:
+    default_model = next(
+        (model for model in family_models if model["provider"] == "openvino"),
+        family_models[0],
+    )
+    return default_model["id"]
+
+
+def on_family_changed() -> None:
+    st.session_state.selected_family_id = st.session_state.family_select
+    family_models = families.get(st.session_state.selected_family_id, [])
+    if family_models:
+        st.session_state.selected_model_id = default_model_id_for_family(family_models)
+        st.session_state.runtime_select = st.session_state.selected_model_id
+    st.session_state.selected_inference_device = "CPU"
+    fetch_models.clear()
+
+
+def on_runtime_changed() -> None:
+    st.session_state.selected_model_id = st.session_state.runtime_select
+    st.session_state.selected_inference_device = "CPU"
+
+
+def on_compare_changed() -> None:
+    st.session_state.compare_variants = st.session_state.compare_toggle
+    st.session_state.selected_inference_device = "CPU"
+
+
 def get_openvino_device_options(model: dict, detected_devices: list[str]) -> tuple[list[str], dict[str, str]]:
     supported_devices = model.get("supported_openvino_devices") or detected_devices or ["CPU"]
     unsupported_devices = model.get("unsupported_openvino_devices", {})
@@ -337,6 +370,15 @@ if "selected_inference_device" not in st.session_state:
 if "hardware" not in st.session_state:
     st.session_state.hardware = {}
 
+if "family_select" not in st.session_state:
+    st.session_state.family_select = st.session_state.selected_family_id
+
+if "runtime_select" not in st.session_state:
+    st.session_state.runtime_select = st.session_state.selected_model_id
+
+if "compare_toggle" not in st.session_state:
+    st.session_state.compare_toggle = st.session_state.compare_variants
+
 
 st.title("Intel Edge AI Assistant")
 
@@ -355,6 +397,7 @@ families = group_models_by_family(models)
 
 if st.session_state.selected_family_id not in families and families:
     st.session_state.selected_family_id = next(iter(families))
+    st.session_state.family_select = st.session_state.selected_family_id
 
 selected_model = None
 metrics_container = None
@@ -408,6 +451,8 @@ with st.sidebar:
         st.warning("Nenhum modelo retornado pelo backend.")
     else:
         family_options = list(families.keys())
+        if st.session_state.family_select not in family_options:
+            st.session_state.family_select = st.session_state.selected_family_id
         family_index = family_options.index(st.session_state.selected_family_id)
 
         selected_family_id = st.selectbox(
@@ -416,6 +461,8 @@ with st.sidebar:
             index=family_index,
             format_func=lambda family_id: families[family_id][0]["family_name"],
             help="Escolha o modelo base usado para responder suas perguntas.",
+            key="family_select",
+            on_change=on_family_changed,
         )
         st.session_state.selected_family_id = selected_family_id
 
@@ -423,6 +470,10 @@ with st.sidebar:
         has_openvino = any(model["provider"] == "openvino" for model in family_models)
         has_transformers = any(model["provider"] == "transformers" for model in family_models)
         family_model_ids = [model["id"] for model in family_models]
+        if st.session_state.selected_model_id not in family_model_ids:
+            st.session_state.selected_model_id = default_model_id_for_family(family_models)
+        if st.session_state.runtime_select not in family_model_ids:
+            st.session_state.runtime_select = st.session_state.selected_model_id
 
         st.divider()
         st.subheader("4. Execucao")
@@ -432,20 +483,17 @@ with st.sidebar:
                 "Comparar base vs OpenVINO",
                 value=st.session_state.compare_variants,
                 help="Executa cada prompt nas duas variantes para comparar desempenho.",
+                key="compare_toggle",
+                on_change=on_compare_changed,
             )
         elif has_openvino:
             st.session_state.compare_variants = False
+            st.session_state.compare_toggle = False
             st.caption("Esta familia so tem variante OpenVINO.")
         else:
             st.session_state.compare_variants = False
+            st.session_state.compare_toggle = False
             st.caption("Esta familia nao tem variante OpenVINO.")
-
-        if st.session_state.selected_model_id not in family_model_ids:
-            default_model = next(
-                (model for model in family_models if model["provider"] == "openvino"),
-                family_models[0],
-            )
-            st.session_state.selected_model_id = default_model["id"]
 
         selected_model_id = st.selectbox(
             "Runtime",
@@ -454,6 +502,8 @@ with st.sidebar:
             format_func=lambda model_id: format_variant_label(models_by_id[model_id]),
             disabled=st.session_state.compare_variants,
             help="Runtime usado quando a comparacao esta desligada.",
+            key="runtime_select",
+            on_change=on_runtime_changed,
         )
         st.session_state.selected_model_id = selected_model_id
         selected_model = models_by_id[selected_model_id]
@@ -520,11 +570,11 @@ with st.sidebar:
         )
 
         if install_targets:
-            button_label = (
-                "Baixar modelos faltantes"
-                if st.session_state.compare_variants
-                else "Baixar modelo selecionado"
-            )
+            if st.session_state.compare_variants:
+                st.warning(
+                    "Comparacao precisa das duas variantes instaladas. "
+                    "Baixe apenas a variante que estiver faltando."
+                )
             model_download_needs_ai_dependencies = any(
                 model["provider"] in {"transformers", "openvino"}
                 for model in install_targets
@@ -534,19 +584,23 @@ with st.sidebar:
             )
             if block_model_download:
                 st.info("Instale as dependencias de IA antes de baixar modelos locais.")
-            if st.button(
-                button_label,
-                use_container_width=True,
-                disabled=block_model_download,
-            ):
-                ok, message = install_missing_models_with_progress(install_targets)
 
-                if ok:
-                    fetch_models.clear()
-                    st.success(message)
-                    st.rerun()
-                else:
-                    st.error(message)
+            for model in install_targets:
+                button_label = f"Baixar {format_variant_label(model)}"
+                if st.button(
+                    button_label,
+                    key=f"install-{model['id']}",
+                    use_container_width=True,
+                    disabled=block_model_download,
+                ):
+                    ok, message = install_model_with_progress(model["id"])
+
+                    if ok:
+                        fetch_models.clear()
+                        st.success(message)
+                        st.rerun()
+                    else:
+                        st.error(f"{model['backend']}: {message}")
 
         st.divider()
         st.subheader("5. Resumo")
@@ -556,6 +610,9 @@ with st.sidebar:
             st.caption("Modo: comparacao base vs OpenVINO")
             st.caption(f"Runtimes: {compared_runtimes}")
             st.caption(f"Instalacao: {installed_count}/{len(comparison_models)} variantes prontas")
+            with st.expander("Status das variantes"):
+                for model in comparison_models:
+                    st.caption(format_model_status(model))
         else:
             st.caption("Modo: runtime unico")
             st.caption(f"Runtime: {format_variant_label(selected_model)}")
