@@ -1,8 +1,0 @@
-transformers
-torch
-openvino
-optimum-intel
-huggingface-hub
-safetensors
-accelerate
-psutil
