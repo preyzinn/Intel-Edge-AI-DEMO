@@ -2,7 +2,7 @@
 
 Intel Edge AI Demo is a small, local benchmark that runs the same language model through PyTorch and OpenVINO and shows the results side by side. It has one Streamlit process and one benchmark workflow.
 
-> **Screenshot placeholder:** add a screenshot of the completed comparison UI here.
+
 
 Benchmark results are not universal. They vary with the computer, selected device, model, prompt, generation settings, operating system, driver, and runtime versions.
 
